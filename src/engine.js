@@ -5,13 +5,14 @@ import {
   verifyCheckpoint,
   signWitnessStatement, verifyWitnessStatement,
   forkEvidence, verifyForkEvidence, signRefusal, verifyRefusal,
+  verifyBlindMembershipIn,
 } from './checkpoint.js';
 import { signRecord, verifyRecord, signVoid, verifyVoid } from './record.js';
 import {
   signDispute, signResolution, disputeStatus,
 } from './dispute.js';
 import { generateKey, sign, verify, publicKeyOf } from './keys.js';
-import { generateModulus, elementOf, accRootOf, accWitness, verifyBlindMembership } from './accumulator.js';
+import { generateModulus, elementOf, accRootOf, accWitness } from './accumulator.js';
 import { standing } from './standing.js';
 import { signRotation, signRevocation, keyTimelineResolve } from './rotation.js';
 import { amountUnits, unitsToAmount, normalizeAmount, sumAmounts } from './units.js';
@@ -370,8 +371,10 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     // voidedness rides with the answer here too (API F8)
     const voidRow = log.voided.find((entry) => entry.record === log.records[index].record.hash);
     if (voidRow) answer.voidedBy = voidRow.voided.hash;
-    // the answer proves itself the same way an auditor would check it
-    if (!verifyBlindMembership(answer, answer.elem, answer.witness)) {
+    // the answer proves itself the same way an auditor would check it —
+    // through the signature-bound surface (attack round three, finding 6):
+    // root and n ride inside stc's own signed body
+    if (!verifyBlindMembershipIn(stc, answer.elem, answer.witness)) {
       return { granted: false, reason: 'the witness did not verify' };
     }
     return answer;
@@ -435,5 +438,6 @@ export const ENGINE_CHECKS = {
   verifyWitnessStatement,
   verifyForkEvidence,
   verifyRefusal,
+  verifyBlindMembershipIn,
   amountUnits,
 };

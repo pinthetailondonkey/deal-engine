@@ -221,6 +221,19 @@ export function accWitness(elementsHex, index, modulusHex) {
 
 // The whole blind surface in one call for the auditor: is this element a
 // member of the tree committed in the (root, n) pair?
+//
+// THE HEADER RULE (attack round three, crypto cluster, finding 6): this
+// function receives (root, n) as loose strings and cannot bind them to a
+// signature. A dishonest relayer who pairs the vendor's honest root with a
+// modulus of their own picks forges membership wholesale: for
+// n' = w^e − root (any witness w, any element e — n' = R·(R−1) is the
+// paper case), w^e ≡ root (mod n') holds by construction. These gates kill
+// that whole paper family at the door, but they are HEURISTICS, not the
+// fix — a patient forger can still shape an odd composite that slips them.
+// THE FIX LIVES ONE LAYER UP: root and n must BOTH be read from ONE
+// verified signed checkpoint body (they are signature-bound there), and
+// verifyBlindMembershipIn in checkpoint.js is the surface that enforces
+// it. Never call this function with a modulus from any other channel.
 export function verifyBlindMembership({ root, n }, elemHex, witnessHex) {
   try {
     if (!root || !n || !elemHex || witnessHex === undefined) return false;
@@ -231,9 +244,16 @@ export function verifyBlindMembership({ root, n }, elemHex, witnessHex) {
     // constants any witness satisfies or trivially forges, and element 0
     // makes witness^0 === 1 for ANY witness (attack round two, finding 3).
     if (expected === 0n || expected === 1n) return false;
+    // the honest modulus is a product of two large ODD primes, so odd is
+    // load-bearing; R·m or w^e−root constructions lean on even values or
+    // moduli built out of the root itself (attack round three, finding 6):
+    if (modulus % 2n === 0n) return false;
+    if (modulus <= expected) return false;         // the root must be a residue mod n
+    if (modulus % expected === 0n) return false;   // n' = R·m is built FROM the root
     const w = hexToBigInt(witnessHex);
     const e = hexToBigInt(elemHex);
     if (e <= 1n) return false;
+    if (w === expected) return false; // the witness IS the commitment: forged header's cheapest move
     return powMod(w, e, modulus) === expected % modulus;
   } catch {
     return false;

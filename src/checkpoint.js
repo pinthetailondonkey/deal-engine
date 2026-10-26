@@ -1,6 +1,7 @@
 import { canonicalBytes, bytesToHex, H, hashHex } from './canonical.js';
 import { sign, verify, publicKeyOf } from './keys.js';
 import { rotationIsDualSigned, keyTimelineResolve } from './rotation.js';
+import { verifyBlindMembership } from './accumulator.js';
 
 // Signed Tree Checkpoint (STC). Fix for four attacker findings in one object:
 // - every field — seq, size, root, previous head hash, key id — sits inside
@@ -214,6 +215,32 @@ export function forkEvidence(stcA, stcB) {
   if (stcA.body.prevHead !== stcB.body.prevHead) return null;
   if (stcA.body.root === stcB.body.root && stcA.body.treeSize === stcB.body.treeSize) return null;
   return { v: 1, tag: FORK_TAG, a: stcA, b: stcB };
+}
+
+// The blind-membership check a DISTANT auditor can run: the (root, n) pair
+// comes out of ONE signed checkpoint body, never from loose strings. This
+// is the closing rule for the forged-header attack (accumulator.js, THE
+// HEADER RULE): a relayer pairing the vendor's honest root with a foreign
+// modulus is exactly the mixing this function makes impossible — both
+// fields ride inside the signature the caller has just re-verified.
+//
+// The checkpoint must still be the VENDOR's — signature validity proves
+// the body is intact, not who signed it. An auditor anchors the key with
+// the same care as any other checkpoint (opts.keyTimeline applies the
+// same revocation gate the standing view uses).
+export function verifyBlindMembershipIn(signedCheckpoint, elemHex, witnessHex, opts = {}) {
+  try {
+    if (!verifyCheckpoint(signedCheckpoint)) return false;
+    if (opts.keyTimeline
+      && !keyTimelineResolve(opts.keyTimeline, signedCheckpoint.key, signedCheckpoint.body.issuedAt).valid) {
+      return false;
+    }
+    const { accRoot: root, accN: n } = signedCheckpoint.body;
+    if (!root || !n) return false;
+    return verifyBlindMembership({ root, n }, elemHex, witnessHex);
+  } catch {
+    return false;
+  }
 }
 
 export function verifyForkEvidence(evidence) {

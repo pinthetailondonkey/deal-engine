@@ -5,6 +5,7 @@ import {
   generateModulus, elementOf, accRootOf, accWitness,
   verifyBlindMembership,
 } from '../src/accumulator.js';
+import { verifyBlindMembershipIn } from '../src/checkpoint.js';
 import { signRecord, recordBody, coSignRecord } from '../src/record.js';
 import { createEngine } from '../src/engine.js';
 import { bytesHex } from './helpers.js';
@@ -47,6 +48,87 @@ test('accumulator: a tampered witness fails, and so does a swapped root', () => 
   const corrupt = (BigInt(`0x${witness}`) ^ 1n).toString(16);
   assert.equal(verifyBlindMembership({ root, n: MODUS.n }, elements[0], corrupt.toString(16)), false);
   assert.equal(verifyBlindMembership({ root: 'ee'.repeat(64), n: MODUS.n }, elements[0], witness), false);
+});
+
+// Attack round three (crypto finding 6): (root, n) arrive as loose strings
+// here, and a relayer who keeps the vendor's honest root but swaps in a
+// modulus of their own forges membership for any element. The honest pair
+// (root = R, n' = R·(R−1)) satisfies R^e ≡ R (mod n') for EVERY element —
+// witness = R, any stranger element, verify. The gates close the paper
+// family; the signature-bound surface (verifyBlindMembershipIn below) is
+// the real closure.
+test('accumulator: a forged modulus built from the root is refused at the door', async () => {
+  const buyer = generateKey();
+  const clock = 1_700_000_000_000;
+  const engine = createEngine({ now: () => clock });
+  const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+    vendor: engine.vendorPublic, buyer: buyer.publicKey,
+    currency: 'btc', dealId: 'd-header', amount: '1', at: clock,
+  }));
+  engine.commitDeal(coSignRecord(vendorSigned, buyer.secretKey), '44'.repeat(8));
+  engine.checkpoint({ accSeed: SEED });
+  const blind = engine.revealDealBlind('d-header');
+  assert.equal(blind.granted, true, 'honest window works');
+  const { root } = blind;
+  const strangerElem = elementOf('ab'.repeat(21));
+
+  // the paper family: n' = R·(R−1), witness = R — used to verify for any element
+  const fakeProduct = (BigInt(`0x${root}`) * (BigInt(`0x${root}`) - 1n)).toString(16);
+  assert.equal(verifyBlindMembership({ root, n: fakeProduct }, strangerElem, root), false,
+    'n\' = R·(R−1) is even and divisible by the root — refused');
+  // odd multiples of the root are refused by divisibility, not parity
+  const R = BigInt(`0x${root}`);
+  const oddSibling = (R * 3n).toString(16); // odd when R is odd, divisible by R either way
+  assert.equal(verifyBlindMembership({ root, n: oddSibling }, strangerElem, root), false,
+    'n\' = R·m carries the root inside it — refused');
+
+  // even moduli, tiny moduli and moduli smaller than the root never verify
+  assert.equal(verifyBlindMembership({ root, n: '8' }, strangerElem, root), false);
+  assert.equal(verifyBlindMembership({ root, n: 'a'.repeat(256) }, strangerElem, root), false,
+    'n\' below the root is not a modulus the root could be a residue of');
+
+  // and the honest pair keeps verifying
+  assert.equal(verifyBlindMembership({ root, n: blind.n }, blind.elem, blind.witness), true);
+});
+
+test('accumulator: verifyBlindMembershipIn binds (root, n) to one signed body', async () => {
+  const buyer = generateKey();
+  const clock = 1_700_000_000_000;
+  const engine = createEngine({ now: () => clock });
+  const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+    vendor: engine.vendorPublic, buyer: buyer.publicKey,
+    currency: 'btc', dealId: 'd-bound', amount: '2', at: clock,
+  }));
+  engine.commitDeal(coSignRecord(vendorSigned, buyer.secretKey), '55'.repeat(8));
+  const stc = engine.checkpoint({ accSeed: SEED });
+  const blind = engine.revealDealBlind('d-bound');
+
+  // the auditor surface: everything read from the signature they re-checked
+  assert.equal(verifyBlindMembershipIn(stc, blind.elem, blind.witness), true);
+
+  // garbage checkpoints, swapped bodies and non-members are all refused
+  assert.equal(verifyBlindMembershipIn({ ...stc, body: { ...stc.body, accRoot: 'ff'.repeat(64) } },
+    blind.elem, blind.witness), false, 'a tampered body fails the signature, so no answer');
+  assert.equal(verifyBlindMembershipIn(null, blind.elem, blind.witness), false);
+  assert.equal(verifyBlindMembershipIn(stc, elementOf('cd'.repeat(21)), blind.witness), false,
+    'the bound surface is still a membership check');
+  // a stranger's self-signed checkpoint with their own accumulator is a
+  // valid signature but NOT the vendor's — anchoring the key is the
+  // auditor's job, and the keyTimeline gate grades it here like everywhere
+  const { keyTimelineResolve } = await import('../src/rotation.js');
+  const outsider = createEngine({ vendor: 'Stranger', now: () => clock });
+  const outsiderBuyer = generateKey();
+  const outsiderRecord = coSignRecord(signRecord(outsider.keys.secretKey, recordBody({
+    vendor: outsider.vendorPublic, buyer: outsiderBuyer.publicKey,
+    currency: 'xmr', dealId: 'd-outsider', amount: '1', at: clock,
+  })), outsiderBuyer.secretKey);
+  outsider.commitDeal(outsiderRecord, '66'.repeat(8));
+  const strangerStc = JSON.parse(JSON.stringify(outsider.checkpoint({ accSeed: 'bb'.repeat(32) })));
+  assert.equal(verifyBlindMembershipIn(strangerStc, blind.elem, blind.witness,
+    { keyTimeline: [{ kind: 'vendor', publicKey: engine.vendorPublic, from: 0, until: null }] }), false,
+    'a stranger-signed body does not speak for the vendor under the timeline');
+  assert.equal(keyTimelineResolve([{ kind: 'vendor', publicKey: engine.vendorPublic, from: 0, until: null }],
+    stc.key, stc.body.issuedAt).valid, true, 'the honest checkpoint rides its own timeline');
 });
 
 test('engine: blind reveal proves membership, leaks no index and no size', async (t) => {

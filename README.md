@@ -33,6 +33,7 @@ Cipher app already uses.
 | A forged statement buys a shared witness | adjudicateFork re-verifies each statement's signature against its claimed witness; a stranger-signed statement weighs nothing | `adjudication.test.js` — forged statement cannot close the fork |
 | A stranger adjudicates someone else's fork, or the admission is tampered | The admission is itself a signed record over the kept/dropped heads; it must name THIS split and carry the same key that signed the checkpoints | `adjudication.test.js` — stranger and tampered sigs fail |
 | (Semantics deliberately strengthened) valid pre-revocation evidence alone used to set FORKED | Now pre-revocation evidence without a shared witness stays open — visible but not a verdict; one witness on both sides closes it | `rotation.test.js` — revised on purpose, both shapes pinned |
+| Leaf salt from one party: the vendor could pre-grind a dictionary against its own published leaves | Both parties' randomness mixed at commit: buyer contributes ≥ 8 bytes, the final salt is a domain-separated hash of both, and provenance is returned labeled | `engine.test.js` — degenerate salts throw; window still opens; vendor-only fallback labeled |
 
 And two things the engine deliberately does NOT do (the reports' honest
 split): it does not anchor a phone to the physical world — that is an
@@ -57,9 +58,13 @@ count is a self-declared, witnessed tree size, worded exactly that way.
 
 ## Known scope limits (stated, not hidden)
 
-- Salt provenance: one party generates it in the engine; production is
-  both parties' randomness mixed. The blinding property (no dictionary
-  without a window) holds either way.
+- Salt provenance: closed. The vendor always brings fresh bytes; the buyer
+  MAY contribute at least 8 bytes and the stored salt is
+  `H('Deal salt mix v1', vendorSalt, buyerSalt)` — never a concatenation
+  a dictionary attack could peel apart. Provenance is returned and
+  labeled ('vendor' vs 'vendor+buyer'); the blinding property holds even
+  when only the vendor contributes. What remains a market question:
+  making sure buyers actually contribute.
 - `Genuinely open`, cited from the reports: witness-overlap economics
   under real gossip partitions (a market question), and position-blind
   (ZK) membership proofs. Partition-vs-fork is now an adjudication

@@ -1,4 +1,5 @@
-import { makeLog } from './log.js';
+import { makeLog, mixedSaltHex } from './log.js';
+import { bytesToHex } from './canonical.js';
 import { makeTree, verifyInclusionProof } from './merkle.js';
 import {
   verifyCheckpoint,
@@ -78,9 +79,19 @@ export function createEngine({ vendor, now = () => Date.now() } = {}) {
 
   engine.keys = vendorPair;
 
-  engine.commitDeal = (record, saltOverride) => {
-    const salt = log.commit(record, saltOverride);
-    return { salt };
+  // Salt provenance: the vendor always brings fresh 16 bytes; the buyer MAY
+  // contribute (a hex string, at least 8 bytes of entropy) and the stored
+  // salt is a domain-separated mix of both. The returned provenance never
+  // lies about who held the randomness.
+  engine.commitDeal = (record, buyerSalt) => {
+    const vendorSaltBytes = crypto.getRandomValues(new Uint8Array(16));
+    let salt;
+    if (buyerSalt === undefined || buyerSalt === null) {
+      salt = log.commit(record, bytesToHex(vendorSaltBytes));
+    } else {
+      salt = log.commit(record, mixedSaltHex(vendorSaltBytes, buyerSalt));
+    }
+    return { salt, saltProvenance: buyerSalt === undefined || buyerSalt === null ? 'vendor' : 'vendor+buyer' };
   };
 
   // A refund or undo: a signed entry on a ledger BESIDE the count. The count

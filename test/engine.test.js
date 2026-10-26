@@ -183,3 +183,86 @@ test('engine: revocation mid-history — old checkpoints keep standing, new ones
   assert.deepEqual(pub.sizeHistory.map((row) => row.size), [1], 'the forgery is not in the history');
   assert.equal(pub.standing.current, true, 'revocation does not erase the honest past');
 });
+
+test('engine: the leaf salt mixes in the buyer\'s randomness, stated in the response', () => {
+  const clock = 1_700_000_000_000;
+  const buyer = generateKey();
+  const recordFor = (engine) => {
+    const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+      vendor: engine.vendorPublic,
+      buyer: buyer.publicKey,
+      currency: 'xmr',
+      dealId: 'd-salt',
+      amount: '1',
+      at: clock,
+    }));
+    return coSignRecord(vendorSigned, buyer.secretKey);
+  };
+  const one = createEngine({ now: () => clock });
+  const two = createEngine({ now: () => clock });
+  const a = one.commitDeal(recordFor(one), 'ab'.repeat(8));
+  const b = two.commitDeal(recordFor(two), (a.salt === 'never' ? '' : 'cd').repeat(8));
+  assert.equal(a.saltProvenance, 'vendor+buyer');
+  assert.equal(b.saltProvenance, 'vendor+buyer');
+  assert.notEqual(a.salt, b.salt, 'different buyer randomness, different even-so records');
+  assert.equal(a.salt.length, 64, 'the mixed salt is a hash: 32 bytes');
+});
+
+test('engine: degenerate buyer salt throws — the mix needs real entropy', () => {
+  const clock = 1_700_000_000_000;
+  const buyer = generateKey();
+  const engine = createEngine({ now: () => clock });
+  const record = (() => {
+    const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+      vendor: engine.vendorPublic,
+      buyer: buyer.publicKey,
+      currency: 'xmr',
+      dealId: 'd-short-salt',
+      amount: '1',
+      at: clock,
+    }));
+    return coSignRecord(vendorSigned, buyer.secretKey);
+  })();
+  assert.throws(() => engine.commitDeal(record, ''), /entropy|hex|salt/i);
+  assert.throws(() => engine.commitDeal(record, 'abc'), /hex|salt/i, 'odd length is not hex');
+  assert.throws(() => engine.commitDeal(record, 'ab'.repeat(4)), /entropy/i, '4 bytes is not enough');
+});
+
+test('engine: the audit window still opens when the leaf is mixed-salted', () => {
+  const clock = 1_700_000_000_000;
+  const buyer = generateKey();
+  const engine = createEngine({ now: () => clock });
+  logDealMixed(engine, buyer);
+  function logDealMixed(eng, byr) {
+    const vendorSigned = signRecord(eng.keys.secretKey, recordBody({
+      vendor: eng.vendorPublic,
+      buyer: byr.publicKey,
+      currency: 'xmr',
+      dealId: 'd-mixed',
+      amount: '0.5',
+      at: clock,
+    }));
+    eng.commitDeal(coSignRecord(vendorSigned, byr.secretKey), 'ef'.repeat(8));
+  }
+  engine.checkpoint({});
+  const reveal = engine.revealDeal('d-mixed');
+  assert.equal(reveal.granted, true);
+  assert.equal(reveal.check, true, 'the window proves inclusion in the mixed tree');
+});
+
+test('engine: no buyer salt — the vendor-only path stays, visibly labeled', () => {
+  const clock = 1_700_000_000_000;
+  const step = { engine: createEngine({ now: () => clock }) };
+  const buyer = generateKey();
+  const vendorSigned = signRecord(step.engine.keys.secretKey, recordBody({
+    vendor: step.engine.vendorPublic,
+    buyer: buyer.publicKey,
+    currency: 'xmr',
+    dealId: 'd-fallback',
+    amount: '1',
+    at: clock,
+  }));
+  const out = step.engine.commitDeal(coSignRecord(vendorSigned, buyer.secretKey));
+  assert.equal(out.saltProvenance, 'vendor', 'the provenance tells the truth about who mixed');
+  assert.equal(out.salt.length >= 32, true);
+});

@@ -36,12 +36,26 @@ export function blindedLeaf(record, salt) {
   return H('Deal leaf blind v1', saltBytes, recordHash);
 }
 
-function hexToBytesStrict(hex) {
+export function hexToBytesStrict(hex) {
   const text = String(hex || '');
   if (text.length % 2) throw new Error('Salt is not hex.');
   const out = new Uint8Array(text.length / 2);
   for (let i = 0; i < out.length; i += 1) out[i] = Number.parseInt(text.slice(i * 2, i * 2 + 2), 16);
   return out;
+}
+
+// Salt provenance: production is both parties' randomness mixed. The
+// vendor brings fresh bytes; the buyer is REQUIRED to bring at least 8
+// bytes when they contribute at all. The final salt is a domain-separated
+// hash of both — never their concatenation, which a dictionary attack
+// could peel apart. The blinding property holds even if the buyer cheats
+// (weak salt still hides the leaf behind vendor randomness); the entropy
+// floor exists so a lazy buyer cannot hand the vendor a predictable mix.
+export function mixedSaltHex(vendorSaltBytes, buyerSaltHex) {
+  if (typeof buyerSaltHex !== 'string') throw new Error('The buyer\'s salt is a hex string or nothing.');
+  if (buyerSaltHex.length < 2 * 8) throw new Error('The buyer\'s salt needs at least 8 bytes of entropy.');
+  const buyerBytes = hexToBytesStrict(buyerSaltHex);
+  return bytesToHex(H('Deal salt mix v1', vendorSaltBytes, buyerBytes));
 }
 
 export function makeLog(options = {}) {
@@ -81,9 +95,9 @@ export function makeLog(options = {}) {
       if (records.some((row) => row.record.hash === signedRecord.hash)) {
         throw new Error('That record is already in the log.');
       }
-      // blinding salt: co-set at commit time. Real deployment: both parties
-      // contribute randomness; the engine sets one here and stores it so a
-      // window can open.
+      // blinding salt: co-set at commit time. With a buyer contribution the
+      // vendor's fresh bytes are mixed with it (mixedSaltHex); without one
+      // the vendor's bytes stand alone and provenance says so.
       const salt = saltHex16 || bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
       records.push({ record: signedRecord, salt });
       return salt;

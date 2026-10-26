@@ -2,7 +2,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKey } from '../src/keys.js';
 import {
-  generateModulus, elementOf, accRootOf, accWitness,
+  generateModulus, elementOf, accRootOf, accWitness, accWitnesses,
   verifyBlindMembership,
 } from '../src/accumulator.js';
 import { verifyBlindMembershipIn } from '../src/checkpoint.js';
@@ -48,6 +48,23 @@ test('accumulator: a tampered witness fails, and so does a swapped root', () => 
   const corrupt = (BigInt(`0x${witness}`) ^ 1n).toString(16);
   assert.equal(verifyBlindMembership({ root, n: MODUS.n }, elements[0], corrupt.toString(16)), false);
   assert.equal(verifyBlindMembership({ root: 'ee'.repeat(64), n: MODUS.n }, elements[0], witness), false);
+});
+
+// Witness batching: one pass over prefix/suffix products instead of a
+// k-element rebuild per witness. The pin is EXACT equality with the
+// per-index path — same math, amortized.
+test('accumulator: batched witnesses are bit-identical to the per-index ones', () => {
+  const leafs = Array.from({ length: 11 }, (_, i) => bytesHex(makeTree(Array.from({ length: 4 }, (_, j) => encodeParts([`batch-${i}`, String(j)]))).mthAll()));
+  const elements = leafs.map(elementOf);
+  const root = accRootOf(elements, MODUS.n);
+  const batched = accWitnesses(elements, MODUS.n);
+  for (let i = 0; i < elements.length; i += 1) {
+    const single = accWitness(elements, i, MODUS.n);
+    assert.equal(batched[i], single, `witness ${i} identical either way`);
+    assert.equal(verifyBlindMembership({ root, n: MODUS.n }, elements[i], batched[i]), true);
+  }
+  // duplicate elements are refused here exactly as in the root builder
+  assert.throws(() => accWitnesses([...elements, elements[0]], MODUS.n), /one accumulator element/);
 });
 
 // Attack round three (crypto finding 6): (root, n) arrive as loose strings
@@ -202,4 +219,46 @@ test('engine: without the option the accumulator is dormant and the window says 
   assert.equal(blind.granted, false);
   assert.equal(blind.reason, 'no published accumulator');
   assert.equal(engine.checkpoint({}).body.accRoot, '', 'old-shape checkpoints stay payload-free');
+});
+
+// The batch window: one gate pass and one root for many deals, answers
+// that stand or refuse per deal, and parity with the single path.
+test('engine: the batch window answers many deals on one checkpoint, each alone', () => {
+  const clock = 1_700_000_000_000;
+  const engine = createEngine({ now: () => clock });
+  const buyer = generateKey();
+  const log = (id, amount) => {
+    const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+      vendor: engine.vendorPublic, buyer: buyer.publicKey,
+      currency: 'xmr', dealId: id, amount, at: clock,
+    }));
+    engine.commitDeal(coSignRecord(vendorSigned, buyer.secretKey), '77'.repeat(8));
+  };
+  log('d-b1', '1');
+  log('d-b2', '2');
+  log('d-b3', '3');
+  const stc = engine.checkpoint({ accSeed: SEED });
+  log('d-late', '4'); // committed AFTER the checkpoint — refused membership
+  engine.voidDeal('d-b3', buyer.secretKey, 'refunded');
+
+  const batch = engine.revealDealsBlind(['d-b1', 'd-b2', 'd-b3', 'd-late', 'd-ghost']);
+  for (const id of ['d-b1', 'd-b2', 'd-b3']) {
+    assert.equal(batch[id].granted, true, `${id} granted`);
+    const single = engine.revealDealBlind(id);
+    assert.deepEqual(batch[id], JSON.parse(JSON.stringify(single)), `${id} identical to the single path`);
+    // each answer proves itself against the same signed checkpoint
+    assert.equal(verifyBlindMembershipIn(stc, batch[id].elem, batch[id].witness), true, `${id} self-verifies`);
+  }
+  assert.notEqual(batch['d-b3'].voidedBy, undefined, 'voidedness rides the batch answer too');
+  assert.equal(batch['d-late'].granted, false);
+  assert.equal(batch['d-late'].reason, 'not in the newest checkpoint');
+  assert.equal(batch['d-ghost'].granted, false);
+  assert.equal(batch['d-ghost'].reason, 'not in log');
+
+  // gate parity: no accumulator published yet -> every entry refuses the same way
+  const fresh = createEngine({ now: () => clock });
+  assert.deepEqual(
+    fresh.revealDealsBlind(['x', 'y']),
+    { x: { granted: false, reason: 'no published accumulator' }, y: { granted: false, reason: 'no published accumulator' } },
+  );
 });

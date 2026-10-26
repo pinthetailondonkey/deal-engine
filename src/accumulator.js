@@ -219,6 +219,34 @@ export function accWitness(elementsHex, index, modulusHex) {
   return bigIntToHex(powMod(2n, product, n), width);
 }
 
+// ALL witnesses in one pass (witness batching, the amortized surface).
+// One-by-one, k witnesses cost k² element-multiplications (each rebuilds
+// the product of the other k−1 elements). The prefix/suffix arrays do it
+// in ~2k multiplications plus one small multiply per witness:
+//     prefix[i] = e_0·…·e_{i−1},  suffix[i] = e_{i+1}·…·e_{k−1}
+//     witness_i  = 2^(prefix[i]·suffix[i])   (mod n)
+// The trapdoor is still unused; the results are bit-identical to calling
+// accWitness per index, which the tests pin. Callers answering many blind
+// queries against one checkpoint (the vendor's own batch reveal) should
+// sit here, not in the per-index loop.
+export function accWitnesses(elementsHex, modulusHex) {
+  distinct(elementsHex);
+  const n = hexToBigInt(modulusHex);
+  const width = Math.ceil((n.toString(2).length + 7) / 8);
+  const k = elementsHex.length;
+  const prefix = new Array(k);
+  const suffix = new Array(k);
+  prefix[0] = 1n;
+  for (let i = 0; i < k; i += 1) prefix[i + 1] = prefix[i] * hexToBigInt(elementsHex[i]);
+  suffix[k - 1] = 1n;
+  for (let i = k - 1; i > 0; i -= 1) suffix[i - 1] = suffix[i] * hexToBigInt(elementsHex[i]);
+  const out = new Array(k);
+  for (let i = 0; i < k; i += 1) {
+    out[i] = bigIntToHex(powMod(2n, prefix[i] * suffix[i], n), width);
+  }
+  return out;
+}
+
 // The whole blind surface in one call for the auditor: is this element a
 // member of the tree committed in the (root, n) pair?
 //

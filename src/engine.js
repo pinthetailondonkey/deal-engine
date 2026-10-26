@@ -380,6 +380,65 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     return answer;
   };
 
+  // The batch window: many blind answers against ONE checkpoint. The
+  // per-deal path above recomputes the element list and the accumulator
+  // root on every call — the expensive half of the answer. Here those are
+  // computed once and only the requested indices get witnesses, so a bulk
+  // answer costs one root instead of one per deal and never worse than
+  // the loop of singles. Same gates, same answer shape, per deal: each
+  // entry stands or refuses alone (witness batching, attack-round-three
+  // follow-up engineering).
+  engine.revealDealsBlind = (dealIds) => {
+    const wanted = [].concat(dealIds || []).filter((dealId) => typeof dealId === 'string');
+    const indexByDeal = new Map();
+    for (const dealId of wanted) {
+      if (typeof dealId !== 'string' || indexByDeal.has(dealId)) continue;
+      const index = log.records.findIndex((row) => row.record.body.dealId === dealId);
+      if (index >= 0) indexByDeal.set(dealId, index);
+    }
+    const stc = stcs.filter((entry) => verifyCheckpoint(entry)
+      && keyTimelineResolve(keyTimeline, entry.key, entry.body.issuedAt).valid).slice(-1)[0] || null;
+    const gateFailure = (reason) => Object.fromEntries(wanted.map((dealId) => [dealId, { granted: false, reason }]));
+    if (!stc || !stc.body || !stc.body.accN || !stc.body.accRoot) return gateFailure('no published accumulator');
+    const counted = stc.body.treeSize;
+    const inCheckpoint = [...indexByDeal.values()].filter((index) => index < counted);
+    if (inCheckpoint.length === 0) {
+      return gateFailure('not in the newest checkpoint');
+    }
+    const slice = log.records.slice(0, counted);
+    const elements = slice.map((_, i) => elementOf(bytesToHex(log.leafBytes(i))));
+    const root = accRootOf(elements, stc.body.accN);
+    if (root !== stc.body.accRoot) return gateFailure('the log does not match its own checkpoint');
+    const answers = {};
+    for (const dealId of wanted) {
+      if (!indexByDeal.has(dealId)) {
+        answers[dealId] = { granted: false, reason: 'not in log' };
+        continue;
+      }
+      const index = indexByDeal.get(dealId);
+      if (index >= counted) {
+        answers[dealId] = { granted: false, reason: 'not in the newest checkpoint' };
+        continue;
+      }
+      const witness = accWitness(elements, index, stc.body.accN);
+      const answer = {
+        granted: true,
+        root: stc.body.accRoot,
+        n: stc.body.accN,
+        elem: elements[index],
+        witness,
+      };
+      const voidRow = log.voided.find((entry) => entry.record === log.records[index].record.hash);
+      if (voidRow) answer.voidedBy = voidRow.voided.hash;
+      if (!verifyBlindMembershipIn(stc, answer.elem, answer.witness)) {
+        answers[dealId] = { granted: false, reason: 'the witness did not verify' };
+        continue;
+      }
+      answers[dealId] = answer;
+    }
+    return JSON.parse(JSON.stringify(answers));
+  };
+
   // ---- money --------------------------------------------------------------
 
   engine.money = {

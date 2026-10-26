@@ -1,6 +1,5 @@
-import { bytesToHex, H, canonicalBytes, hexToBytes } from './canonical.js';
-import { sign, verify, publicKeyOf } from './keys.js';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { bytesToHex, H, canonicalBytes } from './canonical.js';
+import { sign, verify, publicKeyOf, deriveItemKey } from './keys.js';
 
 // Title chains: per-item custody. What the attack reports forced the design
 // to keep, and what they forced it to change:
@@ -17,49 +16,15 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 
 export const HOP_TAG = 'Title hop v1';
 export const DISPUTE_ATTACH_TAG = 'Title dispute attach v1';
-const ITEM_TAG = 'Deal item v1';
-
-// secp256k1 group order — same constant as keys.js
-const SECP256K1_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
-
-function publicKeyFrom(secret) {
-  return schnorr.getPublicKey(secret);
-}
-
-function hexToBytesLocal(hex) {
-  return hexToBytes(hex);
-}
 
 export function itemKeyPair(masterSecretKey, itemId) {
-  // per-item key: skew = H(item id), priv = H(skew || 'item') + master, mod n.
-  // holding two different items' titles shares no key between them.
-  const master = masterSecretKey instanceof Uint8Array
-    ? masterSecretKey : hexToBytesLocal(masterSecretKey);
-  const skew = H(ITEM_TAG, new TextEncoder().encode(String(itemId)));
-  const priv = addScalars(H(ITEM_TAG, skew, canonicalBytes('item')), master);
-  return { secretKey: priv, publicKey: bytesToHex(publicKeyFrom(priv)) };
-}
-
-function addScalars(a, b) {
-  let sum = (bigIntFromBytes(a) + bigIntFromBytes(b)) % SECP256K1_ORDER;
-  if (sum < 0n) sum += SECP256K1_ORDER;
-  return bigIntToBytes(sum);
-}
-
-function bigIntFromBytes(bytes) {
-  let out = 0n;
-  for (const b of bytes) out = (out << 8n) | BigInt(b);
-  return out;
-}
-
-function bigIntToBytes(value) {
-  const out = new Uint8Array(32);
-  let n = value;
-  for (let i = 31; i >= 0; i -= 1) {
-    out[i] = Number(n & 0xffn);
-    n >>= 8n;
-  }
-  return out;
+  // per-item key is derived in keys.js: the master SECRET goes inside a
+  // domain-separated hash with the item id, so the child is not an affine
+  // offset of the master — no public relation links them, and a leaked item
+  // secret recovers nothing. One derivation site total (attack round two):
+  // title.js and keys.js previously kept separate schemes, which was itself
+  // a bug waiting on a caller who mixes them.
+  return deriveItemKey(masterSecretKey, itemId);
 }
 
 export function hopBody(input = {}) {

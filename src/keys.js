@@ -1,6 +1,6 @@
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex, hexToBytes, encodeParts, concatBytes } from './canonical.js';
+import { bytesToHex, hexToBytes, encodeParts, concatBytes, H } from './canonical.js';
 
 // Keys are generated, not self-declared. Three rules the attack reports
 // converged on and the engine enforces at this layer:
@@ -57,21 +57,28 @@ function asBytes(secretKey) {
 }
 
 // Per-item derived key (keyblinding, from the title- and privacy-attack
-// reports): the key a holder uses for one phone is a function of their master
-// secret AND that item's id. Two chains the same person holds share no key.
+// reports, and hardened after attack round two): the key a holder uses for
+// one phone is a function of their master secret AND that item's id. The
+// secret goes INSIDE the hash, so the child key is Hash-to-curve, not an
+// affine offset: no public relation item_pub = master_pub + skew*G exists,
+// two item secrets of one holder share no public constant, and a leaked
+// item secret alone recovers nothing about the master.
 export function deriveItemKey(masterSecretKey, itemId) {
   const master = asBytes(masterSecretKey);
-  const factor = encodeParts(['Deal item key v1', new TextEncoder().encode(String(itemId))]);
-  const skew = sha256BytesConcat(factor, master);
-  const priv = addScalars(skew, master);
-  return { secretKey: priv, publicKey: bytesToHex(schnorr.getPublicKey(priv)) };
+  const idBytes = new TextEncoder().encode(String(itemId));
+  let counter = 0;
+  for (;;) {
+    const digest = H(ITEM_KEY_TAG, master, idBytes, new Uint8Array([counter & 255, counter >> 8]));
+    const candidate = bytesToBigInt(digest) % SECP256K1_ORDER;
+    if (candidate >= 2n) {
+      const priv = bigIntToBytes(candidate);
+      return { secretKey: priv, publicKey: bytesToHex(schnorr.getPublicKey(priv)) };
+    }
+    counter += 1;
+  }
 }
 
-function sha256BytesConcat(a, b) {
-  // deterministic scalar-skew: fine for an engine; a real deployment swaps
-  // this for a stricter BIP32-style path.
-  return addScalars(sha256(encodeParts([a])), b);
-}
+const ITEM_KEY_TAG = 'Deal item key v2';
 
 // secp256k1 group order — a protocol constant, not a lookup.
 const SECP256K1_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;

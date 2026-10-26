@@ -231,9 +231,19 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     });
     const entry = disputeBook.get(dispute.hash);
     if (!entry) throw new Error('That dispute is not filed here.');
-    const stored = JSON.parse(JSON.stringify(resolution));
+    // the arbiter set the door accepted rides WITH the stored resolution:
+    // disputeStatus grades with exactly the arbiters the caller named when
+    // this resolution was accepted (attack round three, API finding 3 —
+    // an arbitered settlement used to grade as open on the status surface,
+    // because status re-verified with no arbiters named). Arbiters are
+    // still called-named-and-stored state, never self-declared by the
+    // resolution body alone.
+    const stored = {
+      resolution: JSON.parse(JSON.stringify(resolution)),
+      arbiterKeys: [].concat(opts.arbiterKeys || []).map((key) => String(key).toLowerCase()),
+    };
     entry.resolutions.push(stored);
-    return JSON.parse(JSON.stringify(stored));
+    return JSON.parse(JSON.stringify(resolution));
   };
 
   engine.disputeStatus = (dispute) => {

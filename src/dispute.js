@@ -117,18 +117,29 @@ export function verifyResolution(signedDispute, resolution, arbiterKeys = []) {
 // A dispute renders as: unresolved ('open', the ⚠ headline), or resolved with
 // its verdict. Resolved disputes keep their history; they stop screaming.
 // The headline verdict follows the record the parties LAST SIGNED (body.at,
-// ties by artifact identity), not who happened to be appended last.
+// ties by body digest), not who happened to be appended last.
+//
+// Each entry is either a raw resolution (no arbiters — a stored resolution
+// without a remembered arbiter set grades as party-signed) or the shape
+// the engine's book keeps, { resolution, arbiterKeys }: the arbiter set is
+// the ONE the door accepted, stored beside it (attack round three, API
+// finding 3 — an arbitered settlement used to grade open because the
+// status surface re-verified with no arbiters). A resolution can never
+// self-declare its arbiters; the set comes from who accepted it.
 export function disputeStatus(signedDispute, resolutions = []) {
-  const valid = resolutions.filter((entry) => {
+  const valid = resolutions.map((entry) => {
+    const shape = entry?.resolution ? [entry.resolution, entry.arbiterKeys || []] : [entry, []];
     try {
-      return verifyResolution(signedDispute, entry);
+      return verifyResolution(signedDispute, shape[0], shape[1]) ? shape[0] : null;
     } catch {
-      return false;
+      return null;
     }
-  });
+  }).filter(Boolean);
   if (valid.length === 0) return { state: 'open', verdict: '' };
   const newest = [...valid].sort(
-    (a, b) => (b.body.at - a.body.at) || String(b.hash).localeCompare(String(a.hash)),
+    (a, b) => (b.body.at - a.body.at)
+      || bytesToHex(H(RESOLUTION_TAG, canonicalBytes(b.body)))
+        .localeCompare(bytesToHex(H(RESOLUTION_TAG, canonicalBytes(a.body)))),
   )[0];
   return {
     state: 'resolved',

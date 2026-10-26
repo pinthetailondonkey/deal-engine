@@ -280,6 +280,31 @@ test('engine: mutating returned objects cannot launder the dispute or void ledge
   })).state, 'resolved', 're-file of the same dispute is a no-op and stays resolved');
 });
 
+test('engine: an arbitered settlement resolves on the status surface', () => {
+  // attack round three, API finding 3: the settlement was stored fine but
+  // disputeStatus re-verified with no arbiters and showed open forever
+  const clock = 1_700_000_000_000;
+  const engine = createEngine({ now: () => clock });
+  const filer = generateKey();
+  const arbiter = generateKey();
+  const d = engine.fileDispute(filer.secretKey, {
+    about: 'cc'.repeat(32),
+    from: filer.publicKey,
+    against: engine.vendorPublic,
+    claim: 'Chain broke before bech32 markers.',
+    at: clock,
+  });
+  assert.equal(engine.disputeStatus(d).state, 'open');
+  engine.resolveDispute([filer.secretKey, arbiter.secretKey], d, 'overturned', {
+    arbiterKeys: [arbiter.publicKey],
+    at: clock + 1000,
+  });
+  const status = engine.disputeStatus(d);
+  assert.equal(status.state, 'resolved');
+  assert.equal(status.verdict, 'overturned');
+  assert.deepEqual(status.history.map((row) => row.verdict), ['overturned']);
+});
+
 test('engine: the leaf salt mixes in the buyer\'s randomness, stated in the response', () => {
   const clock = 1_700_000_000_000;
   const buyer = generateKey();

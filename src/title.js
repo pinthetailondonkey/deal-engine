@@ -80,23 +80,40 @@ export function verifyHopChain(hops) {
   // cross-item blinding means the verifier checks hop-key consistency and
   // signer validity, not re-derivation: the same holder showing two chains
   // reveals no shared key.
+  //
+  // Attack round two (protocol F12, API F2): the verifier authenticated
+  // nothing. Now it also enforces: a chain exists only when its first hop
+  // is a born hop with no parent or a truncation (a flip with an empty
+  // priorHead used to root itself); custody never jumps (next.from must be
+  // prev.to); and the itemKey is constant along the lineage. A null entry
+  // degrades to not-verified instead of crashing the honest verifier.
   let tip = null;
-  const sorted = [...(hops || [])].sort((a, b) => a.body.at - b.body.at);
+  const sorted = [...(hops || [])].sort((a, b) => (a?.body?.at ?? 0) - (b?.body?.at ?? 0));
   for (const hop of sorted) {
     if (!verifyHop(hop)) return { ok: false, reason: 'signature' };
-    // the FIRST hop roots the chain. Only '' (a born hop) or a truncation
-    // (a recorded break that starts a new lineage) may be a root — anything
-    // else claims a parent no one showed, so the chain does not exist.
     if (!tip) {
-      if (hop.body.priorHead === '' || hop.body.kind === 'truncation') {
+      const rooted = hop.body.kind === 'born' && hop.body.priorHead === '';
+      if (rooted || hop.body.kind === 'truncation') {
         tip = hop;
         continue;
       }
       return { ok: false, reason: 'prior' };
     }
     if (hop.body.priorHead !== tip.hash) return { ok: false, reason: 'prior' };
+    // custody never jumps: the next hop may only be STARTED by a party to
+    // the previous hop (born's recipient is the item key — the vendor holds
+    // it and its secret by derivation, so a born→flip sale is a party).
+    // A truncation IS the recorded break; continuity resumes after it.
+    if (tip.body.kind !== 'truncation'
+      && hop.body.kind !== 'truncation'
+      && hop.body.from !== tip.body.from
+      && hop.body.from !== tip.body.to) {
+      return { ok: false, reason: 'custody' };
+    }
+    if (hop.body.itemKey !== tip.body.itemKey) return { ok: false, reason: 'itemKey' };
     tip = hop;
   }
+  if (!tip) return { ok: false, reason: 'empty', tip: null, hasBreak: false };
   return { ok: true, tip, hasBreak: sorted.some((hop) => hop.body.kind === 'truncation') };
 }
 

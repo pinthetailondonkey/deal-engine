@@ -186,6 +186,59 @@ test('engine: revocation mid-history — old checkpoints keep standing, new ones
   assert.equal(pub.standing.current, true, 'revocation does not erase the honest past');
 });
 
+test('engine: a raw dealId cannot dodge uniqueness — the log stores what the signatures bind', () => {
+  const clock = 1_700_000_000_000;
+  const engine = createEngine({ now: () => clock });
+  const buyer = generateKey();
+  // both raw bodies coerce through recordBody to dealId '[object Object]',
+  // but their titles (and so hashes, and signatures) differ: the old log
+  // keyed uniqueness on the RAW field and committed both, doubling the
+  // count and leaving one row unaddressable by any dealId query. The log
+  // keys on the normalized body — the bytes the signatures actually bind
+  // — one of which is also permanently un-voidable/revealable.
+  const make = (title, rawDealId) => {
+    const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+      vendor: engine.vendorPublic,
+      buyer: buyer.publicKey,
+      currency: 'xmr',
+      dealId: '[object Object]',
+      title,
+      amount: '1',
+      at: clock,
+    }));
+    return coSignRecord({ ...vendorSigned, body: { ...vendorSigned.body, dealId: rawDealId } }, buyer.secretKey);
+  };
+  engine.commitDeal(make('iPhone 13', { a: 1 }));
+  assert.throws(() => engine.commitDeal(make('Pixel 7', { b: 2 })), /already committed/);
+  engine.checkpoint({});
+  assert.equal(engine.publicState({}).count, 1);
+  assert.equal(engine.revealDeal('[object Object]').granted, true);
+});
+
+test('engine: distinct dealIds still commit normally', () => {
+  const clock = 1_700_000_000_000;
+  const engine = createEngine({ now: () => clock });
+  const buyer = generateKey();
+  const make = (dealId, title) => {
+    const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+      vendor: engine.vendorPublic,
+      buyer: buyer.publicKey,
+      currency: 'xmr',
+      dealId,
+      title,
+      amount: '1',
+      at: clock,
+    }));
+    return coSignRecord({ ...vendorSigned, body: { ...vendorSigned.body, dealId } }, buyer.secretKey);
+  };
+  engine.commitDeal(make('d-1', 'iPhone 13'));
+  engine.commitDeal(make('d-2', 'Pixel 7'));
+  engine.checkpoint({});
+  assert.equal(engine.publicState({}).count, 2);
+  assert.equal(engine.revealDeal('d-1').granted, true);
+  assert.equal(engine.revealDeal('d-2').granted, true);
+});
+
 test('engine: the leaf salt mixes in the buyer\'s randomness, stated in the response', () => {
   const clock = 1_700_000_000_000;
   const buyer = generateKey();

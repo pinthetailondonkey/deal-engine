@@ -6,7 +6,7 @@ import {
   signCheckpoint, verifyCheckpoint, keyIdOf,
   verifyWitnessStatement, verifyForkEvidence,
 } from './checkpoint.js';
-import { verifyRecord } from './record.js';
+import { verifyRecord, recordBody } from './record.js';
 
 // The log: co-signed deal records, a blinded Merkle tree over them, and the
 // vendor's signed checkpoints + witness statements. This module holds the
@@ -95,9 +95,12 @@ export function makeLog(options = {}) {
         discardedForInvalid += 1;
         throw new Error('The log takes valid dual-signed records only.');
       }
+      // verifyRecord passed means recordBody(signed.body) is exactly what
+      // the hash and both signatures bind — that is the record.
+      const normalizedBody = recordBody(signedRecord.body);
       if (currentVendor
-        && signedRecord.body.vendor !== currentVendor
-        && signedRecord.body.buyer !== currentVendor) {
+        && normalizedBody.vendor !== currentVendor
+        && normalizedBody.buyer !== currentVendor) {
         discardedForInvalid += 1;
         throw new Error('The log holds one vendor\'s records.');
       }
@@ -107,8 +110,11 @@ export function makeLog(options = {}) {
       // dealId uniqueness: one dealId = one record (attack round two, API
       // F4 — a second content-differing record for the same dealId used to
       // double the count and sit there unaddressable by any dealId query).
-      if (records.some((row) => row.record.body.dealId === signedRecord.body.dealId)) {
-        throw new Error(`Deal ${signedRecord.body.dealId} is already committed.`);
+      // The comparison keys on the NORMALIZED body, not the caller's raw
+      // field (attack round three: two raw dealIds that recordBody coerces
+      // to the same string used to commit as distinct records).
+      if (records.some((row) => row.record.body.dealId === normalizedBody.dealId)) {
+        throw new Error(`Deal ${normalizedBody.dealId} is already committed.`);
       }
       // blinding salt: co-set at commit time. With a buyer contribution the
       // vendor's fresh bytes are mixed with it (mixedSaltHex); without one
@@ -117,8 +123,15 @@ export function makeLog(options = {}) {
       // the log keeps its OWN copy of the record (attack round two, API
       // F6): a caller mutating the object it handed in used to rewrite a
       // committed leaf silently — the next checkpoint would sign the
-      // tampered bytes. JSON round-trip is enough: bodies are plain data.
-      records.push({ record: JSON.parse(JSON.stringify(signedRecord)), salt });
+      // tampered bytes. The copy carries the NORMALIZED body: signatures,
+      // hashes and leaf bytes all bind recordBody's output, so storing the
+      // caller's raw body would let the row disagree with its own signature
+      // (attack round three, API finding 1). JSON round-trip is enough:
+      // bodies are plain data.
+      records.push({
+        record: JSON.parse(JSON.stringify({ ...signedRecord, body: normalizedBody })),
+        salt,
+      });
       return salt;
     },
 

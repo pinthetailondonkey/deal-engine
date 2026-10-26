@@ -280,6 +280,35 @@ test('engine: mutating returned objects cannot launder the dispute or void ledge
   })).state, 'resolved', 're-file of the same dispute is a no-op and stays resolved');
 });
 
+test('engine: the door seed is the accumulator identity — pinned before materialization, published from storage', () => {
+  // attack round three, API finding 4: the differing-seed check sat behind
+  // the lazy accMods gate, so a silent re-seed landed first; and a
+  // door-seeded engine published no accN until re-passed its seed
+  const clock = 1_700_000_000_000;
+  const seedHexA = 'a'.repeat(64);
+  const seedB = 'b'.repeat(64);
+  const buyer = generateKey();
+  const engine = createEngine({ now: () => clock, accSeed: seedHexA });
+  const vendorSigned = signRecord(engine.keys.secretKey, recordBody({
+    vendor: engine.vendorPublic,
+    buyer: buyer.publicKey,
+    currency: 'xmr',
+    dealId: 'd-acc',
+    amount: '1',
+    at: clock,
+  }));
+  engine.commitDeal(coSignRecord(vendorSigned, buyer.secretKey));
+  // a checkpoint that names a DIFFERING seed is refused, before any
+  // modulus existed
+  assert.throws(() => engine.checkpoint({ accSeed: seedB }), /already picked/);
+  const stc = engine.checkpoint({});
+  assert.equal(stc.body.accN.length > 0, true, 'the door seed publishes accN on its own');
+  const blind = engine.revealDealBlind('d-acc');
+  assert.equal(blind.granted, true, 'the blind surface is alive from the door seed alone');
+  // and the identity stays pinned afterwards, in either direction
+  assert.throws(() => engine.checkpoint({ accSeed: seedB }), /already picked/);
+});
+
 test('engine: an arbitered settlement resolves on the status surface', () => {
   // attack round three, API finding 3: the settlement was stored fine but
   // disputeStatus re-verified with no arbiters and showed open forever

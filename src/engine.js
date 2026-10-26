@@ -144,13 +144,21 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     if (prior && opts.seq !== undefined && !(Number.isInteger(opts.seq) && opts.seq > prior.body.seq)) {
       throw new Error(`The next checkpoint seq must exceed ${prior.body.seq}.`);
     }
-    // once the accumulator is opted in, every later checkpoint keeps
-    // publishing it — a dormant engine stays field-free instead. A
-    // DIFFERING seed after opt-in is a refusal, not a silent ignore: the
-    // accumulator is the engine's identity for blind membership.
+    // once the accumulator is opted in — at the door or at the first
+    // checkpoint that names a seed — every later checkpoint keeps
+    // publishing it: a door-seeded engine publishes accN from its OWN
+    // stored seed, not only when the caller redundantly re-passes it
+    // (attack round three, API finding 4b: a door-seeded engine's
+    // checkpoints published no accN and the blind surface stayed dead).
+    // A DIFFERING seed after opt-in is a refusal, not a silent ignore —
+    // including BEFORE the modulus is ever materialized (finding 4a: the
+    // differing-seed check used to sit behind the lazy accMods gate, so a
+    // silent re-seed landed first and the original pin died "already
+    // picked"). The accumulator is the engine's identity for blind
+    // membership.
     let accN = '';
-    if (opts.accSeed !== undefined || accMods) {
-      if (accMods && opts.accSeed !== undefined && opts.accSeed !== accSeedOpt) {
+    if (opts.accSeed !== undefined || accSeedOpt !== null) {
+      if (accSeedOpt !== null && opts.accSeed !== undefined && opts.accSeed !== accSeedOpt) {
         throw new Error('This engine already picked its accumulator seed.');
       }
       if (opts.accSeed !== undefined) {

@@ -69,12 +69,12 @@ export function adjudicateFork(evidence, statements = [], opts = {}) {
     if (signerLive && vendorAdmission.body.keep === evidence.a.head
       && vendorAdmission.body.drop === evidence.b.head
       && signer === evidence.a.key) {
-      return { verdict: 'vendor-confirmed', kept: evidence.a.head };
+      return { verdict: 'vendor-confirmed', kept: evidence.a.head, dropped: evidence.b.head };
     }
     if (signerLive && vendorAdmission.body.keep === evidence.b.head
       && vendorAdmission.body.drop === evidence.a.head
       && signer === evidence.b.key) {
-      return { verdict: 'vendor-confirmed', kept: evidence.b.head };
+      return { verdict: 'vendor-confirmed', kept: evidence.b.head, dropped: evidence.a.head };
     }
   }
   return { verdict: 'adjudication-open', sharedWitness: null };

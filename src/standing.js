@@ -36,7 +36,6 @@ export function standing(view, now) {
   const checkpoints = view.keyTimeline
     ? allCheckpoints.filter((stc) => keyTimelineResolve(view.keyTimeline, stc.key, stc.body.issuedAt).valid)
     : allCheckpoints;
-  const stc = checkpoints[checkpoints.length - 1] || null;
 
   // FORKED, now with adjudication: valid fork evidence alone is no longer a
   // verdict. It takes either a shared witness that signed BOTH sides of the
@@ -63,6 +62,31 @@ export function standing(view, now) {
     out.forked = true;
     out.adjudication = 'closed';
   }
+  // A vendor-confirmed verdict has consequences: the line the vendor's own
+  // signed admission declared DEAD stops driving freshness, continuity and
+  // the count (attack round two, F5 — the dead line previously stayed the
+  // newest checkpoint and read `current: true` against the admission).
+  const droppedHeads = verdicts
+    .filter((v) => v.verdict === 'vendor-confirmed' && v.dropped)
+    .map((v) => v.dropped);
+  const keptHeads = verdicts
+    .filter((v) => v.verdict === 'vendor-confirmed' && v.kept)
+    .map((v) => v.kept);
+  if (keptHeads.length > 0) out.details.adjudicatedKept = keptHeads;
+  const dead = new Set(droppedHeads);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const c of checkpoints) {
+      if (dead.has(c.head)) continue;
+      if (dead.has(c.body.prevHead)) {
+        dead.add(c.head);
+        grew = true;
+      }
+    }
+  }
+  const liveCheckpoints = checkpoints.filter((c) => !dead.has(c.head));
+  const stc = liveCheckpoints[liveCheckpoints.length - 1] || null;
   const unresolved = [...suspect, ...genuine.filter((e) => !proved.includes(e))];
   out.suspectedForkEvidence = unresolved.length > 0 && !out.forked;
   if (out.suspectedForkEvidence) out.adjudication = 'open';
@@ -87,7 +111,7 @@ export function standing(view, now) {
     }
 
     // continuity: the newest exists only if its prior head chain checks
-    out.details.extendsPrior = extendsPrior(checkpoints);
+    out.details.extendsPrior = extendsPrior(liveCheckpoints);
   }
 
   // TRUNCATED: the vendor attested that history ends at a stated checkpoint.

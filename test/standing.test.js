@@ -4,6 +4,7 @@ import { generateKey } from '../src/keys.js';
 import { standing } from '../src/standing.js';
 import {
   signCheckpoint, keyIdOf, signWitnessStatement, signRefusal, CADENCE_MS,
+  forkEvidence,
 } from '../src/checkpoint.js';
 import { makeTree } from '../src/merkle.js';
 import { encodeParts } from '../src/canonical.js';
@@ -29,6 +30,32 @@ test('standing: nothing but a signed record — a claim, not standing', () => {
   assert.equal(st.standing, 'vendor-signed-claim');
   assert.equal(st.current, false);
   assert.equal(st.neverAudited, true);
+});
+
+// Attack round two (s3): a vendor-confirmed verdict never touched checkpoint
+// selection — the line the vendor's OWN admission declared dead stayed the
+// newest checkpoint and drove current:true, witnesses and all.
+test('standing: the confirmed-dropped line stops driving freshness and count', async () => {
+  const { signVendorAdmission } = await import('../src/adjudication.js');
+  const w = witnessKey();
+  const t = 1_700_000_000_000;
+  const parent = realStc(t, { seq: 1 });
+  const kept = realStc(t + 1000, { seq: 2, prevHead: parent.head, rootSeed: 'kept' });
+  const dropped = realStc(t + 1000, { seq: 2, prevHead: parent.head, rootSeed: 'dropped', size: 9 });
+  // the dead line even extends and gets witnessed — the strongest case
+  const deadChild = realStc(t + 2000, { seq: 3, prevHead: dropped.head, rootSeed: 'dropped', size: 12, registry: [w.publicKey] });
+  const admission = signVendorAdmission(vendor.secretKey, { keep: kept.head, drop: dropped.head, at: t + 3000 });
+  const st = standing({
+    checkpoints: [parent, kept, dropped, deadChild],
+    forkEvidence: [forkEvidence(kept, dropped)],
+    vendorAdmission: admission,
+    witnessStatements: [signWitnessStatement(w.secretKey, deadChild)],
+  }, t + 10_000);
+  assert.equal(st.forked, true, 'the fork stays visible');
+  assert.equal(st.adjudication, 'closed');
+  assert.equal(st.current, false, 'freshness is computed from the KEPT line, not the dead one');
+  assert.equal(st.stale, true, 'the kept line was never witnessed — that is the honest answer');
+  assert.deepEqual(st.details.adjudicatedKept, [kept.head], 'the verdict surfaces which line was kept');
 });
 
 test('standing: witnessed checkpoint inside cadence = CURRENT', () => {

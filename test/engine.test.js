@@ -127,3 +127,59 @@ test('engine: refusal and title truncation round out the lifecycle', () => {
   const trunc = engine.title.truncate(item.publicKey);
   assert.equal(trunc.body.kind, 'truncation');
 });
+
+test('engine: rotation mid-history — the new key continues the line, silently is impossible', () => {
+  const at = 1_700_000_000_000;
+  let clock = at;
+  const engine = createEngine({ vendor: 'Maria Phones', now: () => clock });
+  const buyer = generateKey();
+  const w1 = generateKey();
+  logDeal(engine, buyer, { dealId: 'd-1', amount: '1', at: clock });
+  const stc1 = engine.checkpoint({ at: clock + 1000 });
+  const oldKeyBefore = stc1.key;
+
+  // rotate: old + new both sign one record; the checkpoint path switches keys
+  const newVendor = generateKey();
+  const rotation = engine.rotateVendorKey(newVendor.secretKey);
+  assert.equal(rotation.body.oldKey, oldKeyBefore);
+  assert.equal(rotation.body.newKey, newVendor.publicKey);
+  assert.ok(rotation.sigs[oldKeyBefore] && rotation.sigs[newVendor.publicKey]);
+
+  clock += 2000;
+  logDeal(engine, buyer, { dealId: 'd-2', amount: '1', at: clock });
+  const stc2 = engine.checkpoint({ at: clock + 1000, witnessRegistry: [w1.publicKey] });
+  engine.witness(w1.secretKey);
+  assert.equal(stc2.key, newVendor.publicKey, 'the new key signs after the switch');
+  assert.equal(stc2.body.prevHead, stc1.head, 'the line continues across the rotation');
+
+  const pub = engine.publicState({ now: clock + 2000 });
+  assert.equal(pub.count, 2);
+  assert.equal(pub.standing.current, true, 'rotation does not break standing');
+  assert.equal(pub.standing.details.extendsPrior, true);
+});
+
+test('engine: revocation mid-history — old checkpoints keep standing, new ones do not count', () => {
+  const at = 1_700_000_000_000;
+  let clock = at;
+  const engine = createEngine({ vendor: 'Two Phones', now: () => clock });
+  const buyer = generateKey();
+  const w1 = generateKey();
+  logDeal(engine, buyer, { dealId: 'd-1', amount: '1', at: clock });
+  const stc1 = engine.checkpoint({ at: clock + 1000, witnessRegistry: [w1.publicKey] });
+  engine.witness(w1.secretKey);
+  clock += 2000; // revocation happens AFTER the honest checkpoint exists
+
+  engine.revokeVendorKey();
+  clock += 5000;
+
+  // a thief holding the now-retired key extends the line: the STC verifies
+  // cryptographically, but the key timeline refuses checkpoints dated after
+  // revocation — it never reaches the count or the size history
+  const forged = engine.checkpoint({ at: clock });
+  assert.equal(forged.key, stc1.key, 'the thief signs with the stolen key');
+
+  const pub = engine.publicState({ now: clock });
+  assert.equal(pub.count, 1, 'the pre-revocation witnessed count stands');
+  assert.deepEqual(pub.sizeHistory.map((row) => row.size), [1], 'the forgery is not in the history');
+  assert.equal(pub.standing.current, true, 'revocation does not erase the honest past');
+});

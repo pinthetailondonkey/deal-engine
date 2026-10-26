@@ -51,19 +51,30 @@ export function makeLog(options = {}) {
   const voidEd = new Map(); // recordHash -> void statement
   let discardedForInvalid = 0;
 
+  let currentVendor = vendorKey;
+
   const log = {
     get size() { return records.length; },
     get records() { return records.slice(); },
     get voided() { return [...voidEd.values()]; },
+
+    // key rotation: the log admits the successor so post-rotation commits
+    // verify against the NEW key. Pre-rotation records stay valid as-is.
+    setVendor(newVendorKey) {
+      if (!newVendorKey || typeof newVendorKey !== 'string') {
+        throw new Error('The log needs a vendor key.');
+      }
+      currentVendor = newVendorKey.toLowerCase();
+    },
 
     commit(signedRecord, saltHex16) {
       if (!verifyRecord(signedRecord)) {
         discardedForInvalid += 1;
         throw new Error('The log takes valid dual-signed records only.');
       }
-      if (vendorKey
-        && signedRecord.body.vendor !== vendorKey
-        && signedRecord.body.buyer !== vendorKey) {
+      if (currentVendor
+        && signedRecord.body.vendor !== currentVendor
+        && signedRecord.body.buyer !== currentVendor) {
         discardedForInvalid += 1;
         throw new Error('The log holds one vendor\'s records.');
       }

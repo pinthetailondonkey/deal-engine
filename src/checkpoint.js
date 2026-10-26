@@ -1,5 +1,6 @@
 import { canonicalBytes, bytesToHex, H, hashHex } from './canonical.js';
 import { sign, verify, publicKeyOf } from './keys.js';
+import { rotationIsDualSigned } from './rotation.js';
 
 // Signed Tree Checkpoint (STC). Fix for four attacker findings in one object:
 // - every field — seq, size, root, previous head hash, key id — sits inside
@@ -118,19 +119,43 @@ export function signWitnessStatement(witnessSecret, stc, priorStatement = null) 
   };
 }
 
-export function verifyWitnessStatement(stc, statement) {
+export function verifyWitnessStatement(stc, statement, rotations = []) {
   try {
     if (!statement?.body || !statement?.sig) return false;
     if (statement.tag !== WITNESS_TAG) return false;
-    if (statement.body.stcHead !== stc.head) return false;
     if (!verifyCheckpoint(stc)) return false;
+    if (statement.body.stcHead !== stc.head) return false;
     const registry = stc.body.witnessRegistry.split('|').filter(Boolean);
-    if (!registry.includes(statement.witness)) return false;
+    // admission: direct registry membership, or a dual-signed rotation on
+    // record reaching back to a key the registry admitted. Never self-claim.
+    if (!registry.includes(statement.witness)
+      && !admittedWitness(stc, statement.witness, rotations)) return false;
     if (Number(stc.body.issuedAt) !== Number(statement.body.witnessTime)) return false;
     return verify(statement.sig, canonicalBytes(statement.body), statement.witness);
   } catch {
     return false;
   }
+}
+
+// Witness admission, including inheritance: a rotated witness key counts
+// only if a dual-signed rotation on record starts from a key the registry
+// already admitted, at or before the checkpoint's issue time. No key
+// admits itself. (Signature and head checks are done by the caller.)
+export function admittedWitness(stc, witnessPub, rotations = []) {
+  let registry;
+  try {
+    registry = stc.body.witnessRegistry.split('|').filter(Boolean);
+  } catch {
+    return false;
+  }
+  if (registry.includes(witnessPub)) return true;
+  for (const rotation of rotations || []) {
+    if (!rotation || rotation.body?.role !== 'witness') continue;
+    if (Number(rotation.body.at) > Number(stc.body.issuedAt)) continue;
+    if (!registry.includes(rotation.body.oldKey)) continue;
+    if (rotation.body.newKey === witnessPub) return rotationIsDualSigned(rotation);
+  }
+  return false;
 }
 
 // Fork evidence: any two valid checkpoints that claim the same previous head

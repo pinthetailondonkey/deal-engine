@@ -26,6 +26,9 @@ Cipher app already uses.
 | Dispute = permanent extortion badge | Resolutions are first-class co-signed records (`settled`/`withdrawn`/`overturned`); withdrawal needs the filer's own sig; strangers cannot sign | `dispute.test.js` — forged resolution never overwrites |
 | Chains not per-item keyed → cross-item linkability | Per-item derived keys from (master, itemId); two titles share no key | `title.test.js` |
 | Orphan flips forge a chain with bogus prior | First hop must be rooted or a recorded truncation break | `title.test.js` — orphan → `{ok:false, reason:'prior'}` |
+| Stolen vendor key extends the line seamlessly | Dual-signed rotation (old+new); revocation retires a key self-signed; the key timeline grades every checkpoint at its own issue time | `rotation.test.js`, `engine.test.js` — post-revocation checkpoints never count; pre-revocation standing is untouched |
+| A stolen witness key mints fork libel against an honest vendor ("permanent, independently verifiable" scar) | Fork evidence is graded against the key timeline: fully post-revocation evidence is suspect-without-verdict, never FORKED | `rotation.test.js` — libel gate; pre-revocation evidence still bites |
+| Witness rotation as a self-claim | A rotated witness key inherits admission only through a dual-signed rotation reaching back to a registry-admitted key | `rotation.test.js`, `checkpoint.js` `admittedWitness` |
 
 And two things the engine deliberately does NOT do (the reports' honest
 split): it does not anchor a phone to the physical world — that is an

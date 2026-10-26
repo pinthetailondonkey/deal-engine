@@ -11,6 +11,7 @@ import {
 } from './dispute.js';
 import { generateKey, sign, verify, publicKeyOf } from './keys.js';
 import { standing } from './standing.js';
+import { signRotation, signRevocation, keyTimelineResolve } from './rotation.js';
 import { amountUnits, unitsToAmount, normalizeAmount, sumAmounts } from './units.js';
 import {
   itemKeyPair, signHop, verifyHopChain, truncateTitleLineage,
@@ -42,6 +43,38 @@ export function createEngine({ vendor, now = () => Date.now() } = {}) {
   const refusals = [];
   const titles = new Map();       // itemKey -> { hops: [] }
   const disputeBook = new Map();  // dispute hash -> { dispute, resolutions: [] }
+  const keyTimeline = [{ kind: 'vendor', publicKey: vendorPair.publicKey, from: 0, until: null }];
+  const witnessRotations = [];
+
+  // Key rotation: old and new vendor keys sign one record; the engine's
+  // checkpoint path switches to the new key. Honest limit, stated here:
+  // dual-signing stops silent rotation. A thief holding a live key can
+  // co-sign their own replacement — that is what revocation is for.
+  engine.rotateVendorKey = (newSecretKey) => {
+    const rotation = signRotation(engine.keys.secretKey, newSecretKey, 'vendor', now());
+    const current = keyTimeline[keyTimeline.length - 1];
+    current.until = { kind: 'rotated', at: rotation.body.at };
+    keyTimeline.push({ kind: 'vendor', publicKey: rotation.body.newKey, from: rotation.body.at, until: null });
+    engine.keys = { secretKey: newSecretKey, publicKey: rotation.body.newKey };
+    engine.vendorPublic = rotation.body.newKey;
+    log.setVendor(rotation.body.newKey);
+    return rotation;
+  };
+
+  // A key retires itself. After the tick, nothing it produces counts — but
+  // everything produced BEFORE the tick keeps its standing.
+  engine.revokeVendorKey = () => {
+    const revocation = signRevocation(engine.keys.secretKey, 'vendor', now());
+    const current = keyTimeline[keyTimeline.length - 1];
+    current.until = { kind: 'revoked', at: revocation.body.at };
+    return revocation;
+  };
+
+  engine.rotateWitness = (oldSecretKey, newSecretKey, opts = {}) => {
+    const rotation = signRotation(oldSecretKey, newSecretKey, 'witness', opts.at ?? now());
+    witnessRotations.push(rotation);
+    return rotation;
+  };
 
   engine.keys = vendorPair;
 
@@ -136,10 +169,14 @@ export function createEngine({ vendor, now = () => Date.now() } = {}) {
 
   engine.publicState = (opts = {}) => {
     const nowAt = opts.now ?? now();
-    const checkpoints = stcs.filter(verifyCheckpoint);
+    // the same key-timeline gate standing applies, applied here so every
+    // public surface (count, size history) grades keys identically
+    const gated = stcs.filter((entry) => verifyCheckpoint(entry)
+      && keyTimelineResolve(keyTimeline, entry.key, entry.body.issuedAt).valid);
+    const checkpoints = gated;
     const stc = checkpoints.slice(-1)[0] || null;
     const statements = stc
-      ? (stcs.filter(verifyCheckpoint), [...witnesses.values()].filter(
+      ? ([...witnesses.values()].filter(
         (s) => verifyParamsWitness(s, stc),
       )) : [];
     const st = standing({
@@ -148,6 +185,8 @@ export function createEngine({ vendor, now = () => Date.now() } = {}) {
       forkEvidence: forkEvidenceList,
       refusals,
       sizeHistory: checkpoints.map((c) => ({ at: c.body.issuedAt, size: c.body.treeSize, seq: c.body.seq })),
+      keyTimeline,
+      witnessRotations,
       voided: log.voided,
     }, nowAt);
     return {

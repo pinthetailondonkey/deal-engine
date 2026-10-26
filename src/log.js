@@ -74,7 +74,7 @@ export function makeLog(options = {}) {
   const log = {
     get size() { return records.length; },
     get records() { return records.slice(); },
-    get voided() { return [...voidEd.values()]; },
+    get voided() { return [...voidEd.values()].map((row) => JSON.parse(JSON.stringify(row))); },
 
     // the accumulator's elements, in log order, from the BLINDED leaves
     elementsFor() {
@@ -145,7 +145,14 @@ export function makeLog(options = {}) {
       if (!records.some((row) => row.record.hash === signedRecord?.hash)) {
         throw new Error('Void needs a record in the log.');
       }
-      voidEd.set(voided.hash, { record: signedRecord.hash, voided });
+      // the void ledger keeps its OWN copy of the statement: the engine
+      // hands the freshly signed object back to its caller, and a caller
+      // mutation of the returned statement used to rewrite the stored
+      // ledger line (attack round three, API finding 2's sibling).
+      voidEd.set(voided.hash, {
+        record: signedRecord.hash,
+        voided: JSON.parse(JSON.stringify(voided)),
+      });
       return voided;
     },
 

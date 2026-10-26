@@ -185,7 +185,11 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
 
   engine.checkFork = (stcA, stcB) => {
     const evidence = forkEvidence(stcA, stcB);
-    if (evidence) forkEvidenceList.push(evidence);
+    if (evidence) {
+      // the list keeps its own copy of the caller-supplied evidence — the
+      // same aliasing rule as the dispute book (attack round three)
+      forkEvidenceList.push(JSON.parse(JSON.stringify(evidence)));
+    }
     return evidence;
   };
 
@@ -204,11 +208,18 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     const dispute = signDispute(secretKey, input);
     // a dispute is filed ONCE (attack round two, API F5): re-filing an
     // identical dispute used to overwrite the book entry and wipe its
-    // resolutions, flipping a settled dispute back to open.
+    // resolutions, flipping a settled dispute back to open. The book also
+    // keeps its OWN copy: handing out or storing caller-held objects let a
+    // mutation launder the record (attack round three, API finding 2 —
+    // mutating the returned resolution reverted a withdrawn dispute to
+    // open in the engine's own book).
     if (!disputeBook.has(dispute.hash)) {
-      disputeBook.set(dispute.hash, { dispute, resolutions: [] });
+      disputeBook.set(dispute.hash, {
+        dispute: JSON.parse(JSON.stringify(dispute)),
+        resolutions: [],
+      });
     }
-    return dispute;
+    return JSON.parse(JSON.stringify(dispute));
   };
 
   engine.resolveDispute = (secretKeys, dispute, verdict, opts = {}) => {
@@ -220,8 +231,9 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     });
     const entry = disputeBook.get(dispute.hash);
     if (!entry) throw new Error('That dispute is not filed here.');
-    entry.resolutions.push(resolution);
-    return resolution;
+    const stored = JSON.parse(JSON.stringify(resolution));
+    entry.resolutions.push(stored);
+    return JSON.parse(JSON.stringify(stored));
   };
 
   engine.disputeStatus = (dispute) => {

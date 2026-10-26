@@ -239,6 +239,47 @@ test('engine: distinct dealIds still commit normally', () => {
   assert.equal(engine.revealDeal('d-2').granted, true);
 });
 
+test('engine: mutating returned objects cannot launder the dispute or void ledgers', () => {
+  const clock = 1_700_000_000_000;
+  const engine = createEngine({ now: () => clock });
+  const buyer = generateKey();
+  logDeal(engine, buyer, { dealId: 'd-1', amount: '0.5', at: clock });
+  engine.checkpoint({});
+  // a returned void statement is the caller's own object — rewriting its
+  // body must not touch the stored ledger line
+  const voided = engine.voidDeal('d-1', buyer.secretKey, 'refunded');
+  assert.equal(engine.publicState({}).standing.details.voidedCount, 1);
+  voided.body.at = 1;
+  voided.body.reason = 'never happened';
+  assert.equal(engine.publicState({}).standing.details.voidedCount, 1, 'the stored void survives');
+
+  const filed = engine.fileDispute(buyer.secretKey, {
+    about: 'bb'.repeat(32),
+    from: buyer.publicKey,
+    against: engine.vendorPublic,
+    claim: 'Late delivery.',
+    at: clock + 1000,
+  });
+  const resolution = engine.resolveDispute([buyer.secretKey, engine.keys.secretKey], filed, 'withdrawn', { at: clock + 2000 });
+  assert.equal(engine.disputeStatus(filed).state, 'resolved');
+  assert.equal(engine.disputeStatus(filed).verdict, 'withdrawn');
+  // mutating what resolveDispute handed back used to revert a withdrawn
+  // dispute to open in the engine's own book (attack round three, API
+  // finding 2 — no crypto needed, the returned object WAS the stored one)
+  resolution.body.verdict = 'something else';
+  resolution.body.at = 1;
+  assert.equal(engine.disputeStatus(filed).verdict, 'withdrawn', 'the stored resolution survives');
+  // mutating the returned dispute record does not corrupt the book either
+  filed.body.claim = 'words changed';
+  assert.equal(engine.disputeStatus(engine.fileDispute(buyer.secretKey, {
+    about: 'bb'.repeat(32),
+    from: buyer.publicKey,
+    against: engine.vendorPublic,
+    claim: 'Late delivery.',
+    at: clock + 1000,
+  })).state, 'resolved', 're-file of the same dispute is a no-op and stays resolved');
+});
+
 test('engine: the leaf salt mixes in the buyer\'s randomness, stated in the response', () => {
   const clock = 1_700_000_000_000;
   const buyer = generateKey();

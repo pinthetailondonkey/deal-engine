@@ -135,7 +135,13 @@ export function verifyInclusionProof(leafBytes, index, treeSize, proof, rootHex)
 
 export function verifyConsistencyProof(m, n, proof, firstRootHex, secondRootHex) {
   try {
-    if (m === n) return proof.length === 0 && firstRootHex === secondRootHex;
+    // identical trees still pose two REAL roots (attack round two, finding
+    // 3): two empty strings are not roots, they are no commitment at all.
+    if (m === n) {
+      return proof.length === 0
+        && /^[0-9a-f]{64}$/.test(firstRootHex)
+        && firstRootHex === secondRootHex;
+    }
     if (m < 1 || m > n) return false;
     let hashM = hexToBytesF(firstRootHex);
     let hashN = hexToBytesF(secondRootHex);

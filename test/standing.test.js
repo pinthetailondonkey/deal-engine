@@ -109,7 +109,7 @@ test('standing: continuity breaks when the head chain does not reach', () => {
 test('standing: fork evidence marks FORKED while everything else still computes', () => {
   const w = witnessKey();
   const at = 1_700_000_000_000;
-  const stc = realStc(at, { registry: [w.publicKey], prevHead: 'aa' });
+  const stc = realStc(at, { registry: [w.publicKey], prevHead: 'aa'.repeat(32) });
   const st = standing({
     checkpoints: [stc],
     witnessStatements: [signWitnessStatement(w.secretKey, stc)],

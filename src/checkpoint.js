@@ -21,6 +21,14 @@ export const REFUSAL_TAG = 'Deal refusal v1';
 // protocol constant. freshedness is not vendor-scheduled.
 export const CADENCE_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Field shapes (attack round two, finding 3): a checkpoint whose root is ''
+// commits to nothing, and an accRoot of '01' (the integer 1) is the
+// multiplicative identity — any witness rides in. The head hash binds these
+// canonical bytes either way, so the shapes are enforced here, at the only
+// door a body can enter through.
+const HEX64 = /^[0-9a-f]{64}$/;
+const HEX_EVEN = /^([0-9a-f]{2})+$/;
+
 export function checkpointBody(input = {}) {
   const body = {
     v: 1,
@@ -36,6 +44,14 @@ export function checkpointBody(input = {}) {
     accRoot: String(input.accRoot || '').toLowerCase(),
   };
   if (!body.keyId) throw new Error('The checkpoint needs a key id.');
+  if (!HEX64.test(body.root)) throw new Error('The checkpoint root is a 64-hex digest.');
+  if (body.prevHead !== '' && !HEX64.test(body.prevHead)) {
+    throw new Error('The prior head is a 64-hex digest, or empty at genesis.');
+  }
+  if (body.accN !== '' && !HEX_EVEN.test(body.accN)) throw new Error('The accumulator modulus is hex bytes.');
+  if (body.accRoot !== '' && !(body.accRoot.length >= 64 && HEX_EVEN.test(body.accRoot))) {
+    throw new Error('The accumulator root is hex bytes of digest width or more.');
+  }
   return body;
 }
 

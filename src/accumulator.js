@@ -89,7 +89,14 @@ function isProbablePrime(candidate, rounds = 40) {
   let r = 0;
   while ((d & 1n) === 0n) { d >>= 1n; r += 1; }
   for (let i = 0; i < rounds; i += 1) {
-    const raw = bytesToBigInt(H(ACC_PRIME_TAG, new Uint8Array([i & 255, i >> 8]))) % (candidate - 3n);
+    // the base is derived from the CANDIDATE too (attack round two, finding
+    // 5): with candidate-constant bases, composites fooling the fixed set
+    // are universal pseudoprimes in principle.
+    const raw = bytesToBigInt(H(
+      ACC_PRIME_TAG,
+      bigIntToHex(candidate, 32),
+      new Uint8Array([i & 255, i >> 8]),
+    )) % (candidate - 3n);
     const base = raw + 2n;
     let x = powMod(base, d, candidate);
     if (x === 1n || x === candidate - 1n) continue;
@@ -215,8 +222,13 @@ export function verifyBlindMembership({ root, n }, elemHex, witnessHex) {
     const modulus = hexToBigInt(n);
     if (modulus < 7n) return false;
     const expected = hexToBigInt(root);
+    // degenerate commitments verify nothing: root 0 and root 1 are the
+    // constants any witness satisfies or trivially forges, and element 0
+    // makes witness^0 === 1 for ANY witness (attack round two, finding 3).
+    if (expected === 0n || expected === 1n) return false;
     const w = hexToBigInt(witnessHex);
     const e = hexToBigInt(elemHex);
+    if (e <= 1n) return false;
     return powMod(w, e, modulus) === expected % modulus;
   } catch {
     return false;

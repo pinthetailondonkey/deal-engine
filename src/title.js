@@ -57,9 +57,13 @@ export function hopHash(body) {
 }
 
 // Dual signatures: born is attested+received; flip is given+received;
-// anchor admits a registry key; truncation is the vendor's own statement
+// anchor admits a registry key; truncation is the VENDOR's own statement
 // that history before a point is lost — it STARTS a lineage, never extends
-// an old one wearing a new name.
+// an old one wearing a new name. Only the item key's DERIVER (the vendor
+// whose master secret produces this itemKey) may truncate; a truncation
+// signed by anyone else is a forgery, not a break (attack round three,
+// protocol P2: any observer could graft a self-signed truncation onto an
+// honest chain and inherit custody through it).
 export function signHop(secretKeys, body) {
   const canonicalBody = hopBody(body);
   if (!canonicalBody.kind) throw new Error('Not a hop kind.');
@@ -84,7 +88,7 @@ function requiredSignersFor(body) {
   return ['from']; // truncation: the holder attests the break alone
 }
 
-export function verifyHopChain(hops) {
+export function verifyHopChain(hops, opts = {}) {
   // cross-item blinding means the verifier checks hop-key consistency and
   // signer validity, not re-derivation: the same holder showing two chains
   // reveals no shared key.
@@ -95,10 +99,22 @@ export function verifyHopChain(hops) {
   // priorHead used to root itself); custody never jumps (next.from must be
   // prev.to); and the itemKey is constant along the lineage. A null entry
   // degrades to not-verified instead of crashing the honest verifier.
+  //
+  // Attack round three (protocol P2): the truncation EXEMPTION was the
+  // bypass — any observer grafted a self-signed truncation onto an honest
+  // tip and inherited custody through it, and the hop after a truncation
+  // started from any stranger. A truncation is now signed by the ITEM KEY
+  // ITSELF (from === itemKey): only the deriver's master secret can produce
+  // that key, so the break is self-proving and no verifier needs the
+  // master. The custody rule then applies with NO truncation exemptions —
+  // the break's holder is the item key, and custody resumes only from it.
   let tip = null;
   const sorted = [...(hops || [])].sort((a, b) => (a?.body?.at ?? 0) - (b?.body?.at ?? 0));
   for (const hop of sorted) {
     if (!verifyHop(hop)) return { ok: false, reason: 'signature' };
+    if (hop.body.kind === 'truncation' && hop.body.from !== hop.body.itemKey) {
+      return { ok: false, reason: 'unproven-break' };
+    }
     if (!tip) {
       const rooted = hop.body.kind === 'born' && hop.body.priorHead === '';
       if (rooted || hop.body.kind === 'truncation') {
@@ -111,10 +127,9 @@ export function verifyHopChain(hops) {
     // custody never jumps: the next hop may only be STARTED by a party to
     // the previous hop (born's recipient is the item key — the vendor holds
     // it and its secret by derivation, so a born→flip sale is a party).
-    // A truncation IS the recorded break; continuity resumes after it.
-    if (tip.body.kind !== 'truncation'
-      && hop.body.kind !== 'truncation'
-      && hop.body.from !== tip.body.from
+    // A verified truncation's holder IS the item key, so the same rule
+    // carries custody across the break.
+    if (hop.body.from !== tip.body.from
       && hop.body.from !== tip.body.to) {
       return { ok: false, reason: 'custody' };
     }
@@ -141,16 +156,19 @@ export function verifyHop(hop) {
   }
 }
 
-export function truncateTitleLineage(vendorSecretKey, priorTip, itemKeyPub, at) {
-  // a truncation record: new root, parent recorded, prior tip never re-usable
+export function truncateTitleLineage(itemSecretKey, priorTip, itemKeyPub, at) {
+  // a truncation record: new root, parent recorded, prior tip never
+  // re-usable. The ITEM KEY signs (attack round three, P2): only the
+  // deriver's master secret can produce that key, so the break is
+  // self-proving — the verifier needs no master secret at all.
   const body = hopBody({
     kind: 'truncation',
     itemKey: itemKeyPub,
     priorHead: priorTip ? priorTip.hash : '',
-    from: publicKeyOf(vendorSecretKey),
-    to: publicKeyOf(vendorSecretKey),
+    from: itemKeyPub,
+    to: itemKeyPub,
     at,
   });
-  const sigs = { [body.from]: sign(vendorSecretKey, canonicalBytes(body)) };
+  const sigs = { [body.from]: sign(itemSecretKey, canonicalBytes(body)) };
   return { v: 1, tag: HOP_TAG, hash: hopHash(body), body, sigs };
 }

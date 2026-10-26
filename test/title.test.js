@@ -69,7 +69,10 @@ test('title: truncation is a lineage break, recorded not hidden', () => {
     kind: 'born', itemKey: item.publicKey, priorHead: '',
     from: maria.publicKey, to: item.publicKey, at: 1_700_000_000_000,
   }));
-  const truncation = truncateTitleLineage(jo.secretKey, born, item.publicKey, 1_700_500_000_000);
+  // attack round three (P2): the ITEM KEY signs the break — only the
+  // deriver's master secret can produce that key, so the break is
+  // self-proving and no verifier needs the master
+  const truncation = truncateTitleLineage(item.secretKey, born, item.publicKey, 1_700_500_000_000);
   const restart = signHop([item.secretKey], hopBody({
     kind: 'anchor', itemKey: item.publicKey, priorHead: truncation.hash,
     from: item.publicKey, to: item.publicKey, at: 1_700_500_000_001,
@@ -77,4 +80,9 @@ test('title: truncation is a lineage break, recorded not hidden', () => {
   const chain = verifyHopChain([born, truncation, restart]);
   assert.equal(chain.ok, true);
   assert.equal(chain.hasBreak, true, 'the break is visible in the chain, forever');
+  // a STRANGER's truncation grafted onto the honest tip proves nothing —
+  // its signer is not the item key, whatever else it signs
+  const graft = truncateTitleLineage(itemKeyPair(jo.secretKey, 'other-item').secretKey, born, item.publicKey, 1_700_500_000_002);
+  const grafted = verifyHopChain([born, graft, restart]);
+  assert.equal(grafted.ok === false, true, 'a foreign-key truncation is an unproven break');
 });

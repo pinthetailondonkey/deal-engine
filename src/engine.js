@@ -399,7 +399,11 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
         throw new Error('A title lineage needs its item public key: 64 lowercase hex chars.');
       }
       const prior = (titles.get(thatItemKeyPub)?.hops || []).slice(-1)[0] || null;
-      const hop = truncateTitleLineage(engine.keys.secretKey, prior, thatItemKeyPub, now());
+      // the ITEM KEY signs the break (attack round three, P2): the vendor
+      // holds its secret by derivation, so the break is self-proving —
+      // a verifier needs no master secret to check it
+      const itemPair = itemKeyPair(engine.keys.secretKey, thatItemKeyPub);
+      const hop = truncateTitleLineage(itemPair.secretKey, prior, thatItemKeyPub, now());
       addHop(thatItemKeyPub, hop);
       return hop;
     },

@@ -8,7 +8,9 @@ import { makeTree } from '../src/merkle.js';
 import { verifyConsistencyProof, consistencyHolds } from '../src/merkle.js';
 import { encodeParts, bytesToHex, H } from '../src/canonical.js';
 import { bytesHex } from './helpers.js';
-import { verifyBlindMembership } from '../src/accumulator.js';
+import { verifyBlindMembership, generateModulus } from '../src/accumulator.js';
+import { createEngine } from '../src/engine.js';
+import { signRecord } from '../src/record.js';
 
 const t0 = 1_700_000_000_000;
 const vendor = generateKey();
@@ -66,4 +68,21 @@ test('shape: identical trees still pose two REAL roots for consistency', () => {
   assert.equal(consistencyHolds(3, 3, [], '', ''), false, 'two empty strings are no commitment');
   const root = bytesHex(makeTree(Array.from({ length: 3 }, (_, i) => encodeParts(['s', String(i)]))).mthAll());
   assert.equal(verifyConsistencyProof(3, 3, [], root, root), true);
+});
+
+test('shape: the accumulator trapdoor is not part of any answer', () => {
+  const buyer = generateKey();
+  const mod = generateModulus({ seed: 'aa'.repeat(32), bits: 1024 });
+  assert.deepEqual(Object.keys(mod).sort(), ['bits', 'n'],
+    'generateModulus hands out the modulus and its width, never p or q');
+  const engine = createEngine({ vendor: 'shape-vendor', accSeed: 'bb'.repeat(32) });
+  let rec = signRecord(buyer.secretKey, {
+    dealId: 'd-shape', vendor: engine.vendorPublic, buyer: buyer.publicKey,
+    title: 'phone', claim: '', currency: 'xmr', amount: '1', at: 1_700_000_000_000,
+  });
+  rec = engine.countersign(rec);
+  engine.commitDeal(rec, 'cc'.repeat(8));
+  engine.checkpoint({ accSeed: 'bb'.repeat(32) });
+  assert.deepEqual(Object.keys(engine.accKey()).sort(), ['bits', 'n'],
+    'engine.accKey() is the public surface: no factorization leaks through it');
 });

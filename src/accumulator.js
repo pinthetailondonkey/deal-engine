@@ -113,7 +113,7 @@ function isProbablePrime(candidate, rounds = 40) {
 
 // ---- deterministic modulus -------------------------------------------------
 
-const modulusCache = new Map(); // `seed|bits` -> { n, p, q, bits }
+const modulusCache = new Map(); // `seed|bits` -> { n, p, q, bits } (trapdoor internal)
 
 function deriveCandidate(seedBytes, label, k, bits) {
   let value = bytesToBigInt(H(ACC_PRIME_TAG, seedBytes, new Uint8Array([label, k & 255, k >> 8])));
@@ -143,16 +143,21 @@ function findPrime(seedBytes, label, bits) {
 // between two engines: a seed pins a factorization, so its holder could
 // factor another engine's N. The engine never needs the trapdoor to
 // witness — this rule is defense in depth.
+//
+// Attack round two, finding 4 / API F1: the trapdoor is no longer part of
+// the answer. (p, q) stay inside this module's cache; the public return is
+// { n, bits } only. A caller holding the engine object can no longer read
+// the factorization out of it.
 export function generateModulus({ seed, bits = 2048 }) {
-  if (typeof seed !== 'string' || !/^[0-9a-f]{64}$/i.test(seed)) {
-    throw new Error('The accumulator needs a seed: exactly 32 bytes of hex.');
+  if (typeof seed !== 'string' || !/^[0-9a-f]{64}$/.test(seed)) {
+    throw new Error('The accumulator needs a seed: exactly 32 bytes of lowercase hex.');
   }
   if (![1024, 2048, 3072, 4096].includes(bits)) {
     throw new Error('The accumulator modulus is 1024, 2048, 3072 or 4096 bits.');
   }
   const cacheKey = `${seed.toLowerCase()}|${bits}`;
   const cached = modulusCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) return { n: cached.n, bits: cached.bits };
   const seedBytes = hexToBytes(seed);
   const half = Math.floor(bits / 2);
   const p = findPrime(seedBytes, 1, half);
@@ -160,7 +165,7 @@ export function generateModulus({ seed, bits = 2048 }) {
   if (q === p) q = findPrime(seedBytes, 3, half);
   const key = { n: p * q, p, q, bits };
   modulusCache.set(cacheKey, key);
-  return key;
+  return { n: key.n, bits: key.bits };
 }
 
 // ---- elements, roots, witnesses --------------------------------------------

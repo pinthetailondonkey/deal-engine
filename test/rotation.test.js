@@ -94,7 +94,7 @@ test('timeline: rotation switches authority at the recorded tick, not before', (
 
 test('standing: fork evidence signed pre-revocation still counts FORKED; post-revocation is suspect, never a verdict', async (t) => {
   const { standing } = await import('../src/standing.js');
-  const { signCheckpoint, keyIdOf, forkEvidence } = await import('../src/checkpoint.js');
+  const { signCheckpoint, keyIdOf, forkEvidence, signWitnessStatement } = await import('../src/checkpoint.js');
   const vendorPair = generateKey();
 
   const stc = (at, over = {}) => signCheckpoint(vendorPair.secretKey, {
@@ -107,9 +107,13 @@ test('standing: fork evidence signed pre-revocation still counts FORKED; post-re
     witnessRegistry: over.registry ?? [],
   });
 
+  // the fork-proved shape: one witness admitted on BOTH lines signed both,
+  // so the split is provably a fork (adjudicateFork re-checks each sig)
+  const w = generateKey();
   const parent = stc(t0 - 3_000, { seed: 'base' });
-  const oldA = stc(t0 - 2_000, { seq: 2, seed: 'old', prevHead: parent.head });
-  const oldB = stc(t0 - 1_000, { seq: 3, treeSize: 7, seed: 'old', prevHead: parent.head });
+  const oldA = stc(t0 - 2_000, { seq: 2, seed: 'old', prevHead: parent.head, registry: [w.publicKey] });
+  const oldB = stc(t0 - 1_000, { seq: 3, treeSize: 7, seed: 'old', prevHead: parent.head, registry: [w.publicKey] });
+  const bothSides = [signWitnessStatement(w.secretKey, oldA), signWitnessStatement(w.secretKey, oldB)];
   const legitEvidence = forkEvidence(oldA, oldB);
   assert.ok(legitEvidence, 'pre-revocation fork evidence is valid evidence');
 
@@ -137,7 +141,22 @@ test('standing: fork evidence signed pre-revocation still counts FORKED; post-re
     forkEvidence: [legitEvidence],
     keyTimeline: timeline,
   }, t0 + 4_000);
-  assert.equal(st2.forked, true, 'evidence from while the key was live bites');
+  // semantics deliberately strengthened: valid evidence alone was a verdict
+  // before adjudication; now the pre-revocation key is genuine but the
+  // split is UNPROVED with no shared witness — visible, never FORKED
+  assert.equal(st2.forked, false, 'genuine evidence without a shared witness stays open');
+  assert.equal(st2.suspectedForkEvidence, true);
+  assert.equal(st2.adjudication, 'open');
+
+  const st3 = standing({
+    checkpoints: [stc(t0 + 3_000, { registry: [] })],
+    witnessStatements: bothSides,
+    forkEvidence: [legitEvidence],
+    keyTimeline: timeline,
+  }, t0 + 4_000);
+  assert.equal(st3.forked, true, 'the same evidence plus one witness on both sides closes it');
+  assert.equal(st3.suspectedForkEvidence, false, 'proved — no suspicion badge left on');
+  assert.equal(st3.adjudication, 'closed');
 });
 
 test('witness rotation: new key inherits admission only through a signed rotation on record', () => {

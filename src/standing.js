@@ -1,6 +1,7 @@
 import { verifyCheckpoint, verifyWitnessStatement, verifyRefusal, CADENCE_MS, verifyForkEvidence, admittedWitness } from './checkpoint.js';
 import { verifyConsistencyProof } from './merkle.js';
 import { keyTimelineResolve, forkEvidenceGrade } from './rotation.js';
+import { adjudicateFork } from './adjudication.js';
 
 // Standing: the 7-state lifecycle, computed from evidence in front of the
 // observer, on the observer's clock. The states are computed, not judged,
@@ -37,17 +38,30 @@ export function standing(view, now) {
     : allCheckpoints;
   const stc = checkpoints[checkpoints.length - 1] || null;
 
-  // FORKED: valid fork evidence attached to this vendor, ever. Evidence is
-  // graded against the key timeline: if either of its signer keys was
-  // revoked before that checkpoint's issue time, the evidence is suspect —
-  // visible, but no verdict. A stolen key must not be able to libel.
+  // FORKED, now with adjudication: valid fork evidence alone is no longer a
+  // verdict. It takes either a shared witness that signed BOTH sides of the
+  // split (proved, no judge) or the vendor's own signed admission of one
+  // line. Equal-strength incompatible lines stay VISIBLE but un-accused —
+  // a partition is possible, and pretending otherwise was the design's
+  // original sin. Assessed against the key timeline exactly as before.
   const evidence = (view.forkEvidence || []).filter((evidence) => verifyForkEvidence(evidence));
-  const genuine = evidence.filter((e) => forkEvidenceGrade(e, view.keyTimeline) === 'genuine');
-  const suspect = evidence.filter((e) => forkEvidenceGrade(e, view.keyTimeline) !== 'genuine');
-  if (genuine.length > 0) {
+  // the key-state gate applies only when the view carries a timeline — a
+  // view without one grades every verifying checkpoint the old way, and
+  // evidence must follow the same convention.
+  const genuine = view.keyTimeline
+    ? evidence.filter((e) => forkEvidenceGrade(e, view.keyTimeline) === 'genuine')
+    : evidence.slice();
+  const suspect = evidence.filter((e) => !genuine.includes(e));
+  const opts = { vendorAdmission: view.vendorAdmission };
+  const verdicts = genuine.map((e) => adjudicateFork(e, view.witnessStatements || [], opts));
+  const proved = genuine.filter((e, i) => ['fork-proved', 'vendor-confirmed'].includes(verdicts[i].verdict));
+  if (proved.length > 0) {
     out.forked = true;
+    out.adjudication = 'closed';
   }
-  out.suspectedForkEvidence = suspect.length > 0 && !out.forked;
+  const unresolved = [...suspect, ...genuine.filter((e) => !proved.includes(e))];
+  out.suspectedForkEvidence = unresolved.length > 0 && !out.forked;
+  if (out.suspectedForkEvidence) out.adjudication = 'open';
 
   if (stc) {
     // Freshness = time since the newest WITNEEDED checkpoint, on the

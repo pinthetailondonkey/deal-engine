@@ -29,6 +29,10 @@ Cipher app already uses.
 | Stolen vendor key extends the line seamlessly | Dual-signed rotation (old+new); revocation retires a key self-signed; the key timeline grades every checkpoint at its own issue time | `rotation.test.js`, `engine.test.js` — post-revocation checkpoints never count; pre-revocation standing is untouched |
 | A stolen witness key mints fork libel against an honest vendor ("permanent, independently verifiable" scar) | Fork evidence is graded against the key timeline: fully post-revocation evidence is suspect-without-verdict, never FORKED | `rotation.test.js` — libel gate; pre-revocation evidence still bites |
 | Witness rotation as a self-claim | A rotated witness key inherits admission only through a dual-signed rotation reaching back to a registry-admitted key | `rotation.test.js`, `checkpoint.js` `admittedWitness` |
+| FORKED from equal-strength evidence alone: the accused vendor has no answer to a partition (the reports' hardest question) | FORKED now requires adjudication: **fork-proved** = one admitted witness signed BOTH sides of the split (every statement signature re-checked, never trusted) or **vendor-confirmed** = a signed admission naming the kept line, signed by the checkpoints' own key; everything stays **adjudication-open** otherwise — visible, un-accused | `adjudication.test.js`, `standing.test.js` |
+| A forged statement buys a shared witness | adjudicateFork re-verifies each statement's signature against its claimed witness; a stranger-signed statement weighs nothing | `adjudication.test.js` — forged statement cannot close the fork |
+| A stranger adjudicates someone else's fork, or the admission is tampered | The admission is itself a signed record over the kept/dropped heads; it must name THIS split and carry the same key that signed the checkpoints | `adjudication.test.js` — stranger and tampered sigs fail |
+| (Semantics deliberately strengthened) valid pre-revocation evidence alone used to set FORKED | Now pre-revocation evidence without a shared witness stays open — visible but not a verdict; one witness on both sides closes it | `rotation.test.js` — revised on purpose, both shapes pinned |
 
 And two things the engine deliberately does NOT do (the reports' honest
 split): it does not anchor a phone to the physical world — that is an
@@ -46,6 +50,7 @@ count is a self-declared, witnessed tree size, worded exactly that way.
 - `checkpoint.js` — signed tree checkpoints, witness statements, fork evidence, refusals
 - `log.js` — blinded log + commits
 - `standing.js` — the 7-state lifecycle on the observer's clock
+- `adjudication.js` — the fork procedure: fork-proved / vendor-confirmed / adjudication-open
 - `dispute.js` — disputes + resolutions
 - `title.js` — per-item custody chain
 - `engine.js` — the facade wiring all of it
@@ -56,5 +61,7 @@ count is a self-declared, witnessed tree size, worded exactly that way.
   both parties' randomness mixed. The blinding property (no dictionary
   without a window) holds either way.
 - `Genuinely open`, cited from the reports: witness-overlap economics
-  under real gossip partitions, partition-vs-fork adjudication as a
-  dispute procedure, position-blind (ZK) membership proofs.
+  under real gossip partitions (a market question), and position-blind
+  (ZK) membership proofs. Partition-vs-fork is now an adjudication
+  procedure, not an open question; what remains open is when honest
+  witnesses END UP shared — the engine cannot make them.

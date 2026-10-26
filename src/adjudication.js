@@ -1,0 +1,100 @@
+import { canonicalBytes, bytesToHex, H } from './canonical.js';
+import { sign, verify, publicKeyOf } from './keys.js';
+
+// Fork adjudication — an evaluator, not a verdict machine.
+//
+// The design said "independently verifiable" for a forked state and the
+// reports replied that two lines with disjoint witness sets are
+// indistinguishable from a relay partition: no crypto trick closes that,
+// only a PROCEDURE. This module is the procedure:
+//
+// 1. FORK-PROVED: the same admitted witness key signed both sides of the
+//    split. The observer re-checks each statement's signature against its
+//    witness key — statements are never trusted, only re-verified.
+// 2. VENDOR-CONFIRMED: the checkpoint-signing key names (dual-recorded)
+//    one line it keeps; the other is declared dead. The vendor's signature
+//    over THIS evidence ends the ambiguity — the honest question (which
+//    line was real) becomes unnecessary.
+// 3. ADJUDICATION-OPEN: incompatible lines but no shared witness and no
+//    admission. A partition is possible. The design refuses to guess, and
+//    visibly — the dispute stays open until new evidence arrives.
+//
+// Out of scope, stated: witness-OVERLAP ECONOMICS (whether honest markets
+// naturally converge on shared witnesses) is a market question, not code.
+
+export const ADMISSION_TAG = 'Deal fork admission v1';
+
+export function adjudicateFork(evidence, statements = [], opts = {}) {
+  if (!evidence?.a || !evidence?.b) return { verdict: 'adjudication-open', sharedWitness: null };
+  // statements are re-verified per witness key before they may speak
+  const genuine = (statements || []).filter((statement) => {
+    try {
+      return verify(statement.sig, canonicalBytes(statement.body), statement.witness)
+        && (statement.body.stcHead === evidence.a.head || statement.body.stcHead === evidence.b.head);
+    } catch {
+      return false;
+    }
+  });
+  const signedA = new Set(genuine.filter((s) => s.body.stcHead === evidence.a.head).map((s) => s.witness));
+  for (const statement of genuine) {
+    if (statement.body.stcHead === evidence.b.head && signedA.has(statement.witness)) {
+      return { verdict: 'fork-proved', sharedWitness: statement.witness };
+    }
+  }
+
+  // vendor admission path: the admission must be signed by the key that
+  // signed the checkpoints, and name this split
+  const vendorAdmission = opts?.vendorAdmission;
+  if (vendorAdmission && verifyVendorAdmission(vendorAdmission)) {
+    const signer = vendorAdmission.key;
+    if (vendorAdmission.body.keep === evidence.a.head
+      && vendorAdmission.body.drop === evidence.b.head
+      && signer === evidence.a.key) {
+      return { verdict: 'vendor-confirmed', kept: evidence.a.head };
+    }
+    if (vendorAdmission.body.keep === evidence.b.head
+      && vendorAdmission.body.drop === evidence.a.head
+      && signer === evidence.b.key) {
+      return { verdict: 'vendor-confirmed', kept: evidence.b.head };
+    }
+  }
+  return { verdict: 'adjudication-open', sharedWitness: null };
+}
+
+// The vendor names the line that is real. This is a signed admission, and
+// it is itself evidence — not standing. It only becomes meaningful when
+// held NEXT TO the fork evidence it matches (the key must be the same key
+// that signed the checkpoints in the evidence, checked by adjudicateFork).
+export function signVendorAdmission(vendorSecretKey, { keep, drop, at }) {
+  const body = {
+    v: 1,
+    keep: String(keep || ''),
+    drop: String(drop || ''),
+    at: requireAt(at),
+  };
+  const key = publicKeyOf(vendorSecretKey);
+  return {
+    v: 1,
+    tag: ADMISSION_TAG,
+    hash: bytesToHex(H(ADMISSION_TAG, canonicalBytes(body))),
+    body,
+    key,
+    sig: sign(vendorSecretKey, canonicalBytes(body)),
+  };
+}
+
+function requireAt(value) {
+  if (!Number.isInteger(value) || value <= 0) throw new Error('The admission needs a time.');
+  return value;
+}
+
+export function verifyVendorAdmission(admission) {
+  try {
+    if (!admission?.body || admission.tag !== ADMISSION_TAG) return false;
+    requireAt(admission.body.at);
+    if (bytesToHex(H(ADMISSION_TAG, canonicalBytes(admission.body))) !== admission.hash) return false;
+    return verify(admission.sig, canonicalBytes(admission.body), admission.key);
+  } catch {
+    return false;
+  }
+}

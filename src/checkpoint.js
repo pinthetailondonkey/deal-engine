@@ -170,6 +170,10 @@ export function admittedWitness(stc, witnessPub, rotations = []) {
   if (registry.includes(witnessPub)) return true;
   for (const rotation of rotations || []) {
     if (!rotation || rotation.body?.role !== 'witness') continue;
+    // a rotation without a time predates nothing: NaN > issuedAt is false,
+    // so the missing-at case used to slip through the gate (attack round
+    // two, finding 8) — require a real integer `at`.
+    if (!Number.isInteger(rotation.body.at)) continue;
     if (Number(rotation.body.at) > Number(stc.body.issuedAt)) continue;
     if (!registry.includes(rotation.body.oldKey)) continue;
     if (rotation.body.newKey === witnessPub) return rotationIsDualSigned(rotation);

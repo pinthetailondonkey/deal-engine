@@ -110,7 +110,9 @@ test('engine: disputes resolve, never scream forever', () => {
   const first = engine.disputeStatus(d);
   assert.equal(first.state, 'open');
   engine.resolveDispute([vendorAlt.secretKey, engine.keys.secretKey], d, 'settled', {});
-  assert.deepEqual(engine.disputeStatus(d), { state: 'resolved', verdict: 'settled' });
+  const status = engine.disputeStatus(d);
+  assert.equal(status.state, 'resolved');
+  assert.equal(status.verdict, 'settled');
 });
 
 test('engine: refusal and title truncation round out the lifecycle', () => {

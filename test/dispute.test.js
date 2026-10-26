@@ -67,9 +67,13 @@ test('dispute: open vs resolved — resolved stops the ⚠ headline', () => {
   const d = dispute();
   assert.deepEqual(disputeStatus(d, []), { state: 'open', verdict: '' });
   const settled = signResolution([A.secretKey, B.secretKey], d, 'settled', t(2));
-  assert.deepEqual(disputeStatus(d, [settled]), { state: 'resolved', verdict: 'settled' });
+  const status = disputeStatus(d, [settled]);
+  assert.equal(status.state, 'resolved');
+  assert.equal(status.verdict, 'settled');
   // a forged resolution next to a real one does not overwrite the verdict
   const fake = JSON.parse(JSON.stringify(settled));
   fake.body.verdict = 'overturned';
-  assert.deepEqual(disputeStatus(d, [settled, fake]), { state: 'resolved', verdict: 'settled' });
+  const status2 = disputeStatus(d, [settled, fake]);
+  assert.equal(status2.state, 'resolved');
+  assert.equal(status2.verdict, 'settled');
 });

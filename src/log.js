@@ -40,6 +40,9 @@ export function blindedLeaf(record, salt) {
 export function hexToBytesStrict(hex) {
   const text = String(hex || '');
   if (text.length % 2) throw new Error('Salt is not hex.');
+  if (!/^[0-9a-f]+$/.test(text)) {
+    throw new Error('Salt is lowercase hex bytes — a 0x prefix is a salt, not a tag.');
+  }
   const out = new Uint8Array(text.length / 2);
   for (let i = 0; i < out.length; i += 1) out[i] = Number.parseInt(text.slice(i * 2, i * 2 + 2), 16);
   return out;
@@ -101,11 +104,21 @@ export function makeLog(options = {}) {
       if (records.some((row) => row.record.hash === signedRecord.hash)) {
         throw new Error('That record is already in the log.');
       }
+      // dealId uniqueness: one dealId = one record (attack round two, API
+      // F4 — a second content-differing record for the same dealId used to
+      // double the count and sit there unaddressable by any dealId query).
+      if (records.some((row) => row.record.body.dealId === signedRecord.body.dealId)) {
+        throw new Error(`Deal ${signedRecord.body.dealId} is already committed.`);
+      }
       // blinding salt: co-set at commit time. With a buyer contribution the
       // vendor's fresh bytes are mixed with it (mixedSaltHex); without one
       // the vendor's bytes stand alone and provenance says so.
       const salt = saltHex16 || bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-      records.push({ record: signedRecord, salt });
+      // the log keeps its OWN copy of the record (attack round two, API
+      // F6): a caller mutating the object it handed in used to rewrite a
+      // committed leaf silently — the next checkpoint would sign the
+      // tampered bytes. JSON round-trip is enough: bodies are plain data.
+      records.push({ record: JSON.parse(JSON.stringify(signedRecord)), salt });
       return salt;
     },
 

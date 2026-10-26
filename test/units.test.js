@@ -4,7 +4,10 @@ import { amountUnits, unitsToAmount, normalizeAmount, sumAmounts } from '../src/
 
 test('money: a float is not a coin amount — numbers only enter as finite strings', () => {
   assert.equal(amountUnits('0.000000000001', 'xmr'), 1n); // 1 piconero
-  assert.equal(amountUnits(0.5, 'xmr'), 500000000000n); // finite JS float, but converted through its exact string
+  // hardened after attack round two: a number is refused outright —
+  // String(0.1+0.2) used to become a SIGNED amount of 0.30000000000000004
+  assert.throws(() => normalizeAmount(0.5), /not a coin amount/);
+  assert.equal(amountUnits(0.5, 'xmr'), null, 'number input refuses to a null unit count');
   assert.throws(() => normalizeAmount(Number.NaN));
   assert.throws(() => normalizeAmount(Number.POSITIVE_INFINITY));
   assert.throws(() => normalizeAmount('1e-12'), /decimal string/);

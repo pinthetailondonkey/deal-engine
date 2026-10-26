@@ -102,7 +102,13 @@ export function verifyResolution(signedDispute, resolution, arbiterKeys = []) {
     if (resolution.body.verdict === 'withdrawn') {
       return !!resolution.sigs[signedDispute.body.from];
     }
-    return covered === 2 || Object.keys(resolution.sigs).length >= 2;
+    // both parties sign every verdict (attack round two, protocol F10) —
+    // UNLESS the verifying caller actually passed arbiterKeys, in which case
+    // the filer + a named arbiter is the documented arbitration path. Two
+    // arbiters alone still settle nothing: the `>= 2 signatures` clause that
+    // allowed it is gone.
+    if (arbiterKeys.length > 0) return covered === 1;
+    return covered === 2;
   } catch {
     return false;
   }
@@ -110,6 +116,8 @@ export function verifyResolution(signedDispute, resolution, arbiterKeys = []) {
 
 // A dispute renders as: unresolved ('open', the ⚠ headline), or resolved with
 // its verdict. Resolved disputes keep their history; they stop screaming.
+// The headline verdict follows the record the parties LAST SIGNED (body.at,
+// ties by artifact identity), not who happened to be appended last.
 export function disputeStatus(signedDispute, resolutions = []) {
   const valid = resolutions.filter((entry) => {
     try {
@@ -119,5 +127,12 @@ export function disputeStatus(signedDispute, resolutions = []) {
     }
   });
   if (valid.length === 0) return { state: 'open', verdict: '' };
-  return { state: 'resolved', verdict: valid[valid.length - 1].body.verdict };
+  const newest = [...valid].sort(
+    (a, b) => (b.body.at - a.body.at) || String(b.hash).localeCompare(String(a.hash)),
+  )[0];
+  return {
+    state: 'resolved',
+    verdict: newest.body.verdict,
+    history: valid.map((r) => ({ at: r.body.at, verdict: r.body.verdict })).sort((a, b) => a.at - b.at),
+  };
 }

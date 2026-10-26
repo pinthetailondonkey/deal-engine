@@ -31,6 +31,12 @@ import {
 //   membership oracle. (Rule 10: correlation is a read.)
 // - disclosure answers are separately priced: one reveal answers one leaf.
 export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits = 2048 } = {}) {
+  // a bad accSeed is refused at the door, not discovered at the first
+  // checkpoint (attack round two, API F10: the failed start used to leave
+  // the engine in an un-opted-in limbo that silently published no field)
+  if (accSeed !== undefined && (typeof accSeed !== 'string' || !/^[0-9a-f]{64}$/.test(accSeed))) {
+    throw new Error('The accumulator seed is 32 bytes of lowercase hex.');
+  }
   const vendorPair = generateKey();
   const engine = {
     vendor,
@@ -132,11 +138,27 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     if (prior && opts.priorHead && opts.priorHead !== prior.head) {
       throw new Error('A checkpoint extends the latest one or nothing.');
     }
+    // seq is the signer's own ledger line: it may never go backward (attack
+    // round two, API F9 — the engine used to sign seq 0 after seq 1 and
+    // observers read a rebuilt history where none occurred)
+    if (prior && opts.seq !== undefined && !(Number.isInteger(opts.seq) && opts.seq > prior.body.seq)) {
+      throw new Error(`The next checkpoint seq must exceed ${prior.body.seq}.`);
+    }
     // once the accumulator is opted in, every later checkpoint keeps
-    // publishing it — a dormant engine stays field-free instead.
+    // publishing it — a dormant engine stays field-free instead. A
+    // DIFFERING seed after opt-in is a refusal, not a silent ignore: the
+    // accumulator is the engine's identity for blind membership.
     let accN = '';
     if (opts.accSeed !== undefined || accMods) {
-      if (opts.accSeed !== undefined) accSeedOpt = opts.accSeed;
+      if (accMods && opts.accSeed !== undefined && opts.accSeed !== accSeedOpt) {
+        throw new Error('This engine already picked its accumulator seed.');
+      }
+      if (opts.accSeed !== undefined) {
+        if (typeof opts.accSeed !== 'string' || !/^[0-9a-f]{64}$/.test(opts.accSeed)) {
+          throw new Error('The accumulator seed is 32 bytes of lowercase hex.');
+        }
+        accSeedOpt = opts.accSeed;
+      }
       accN = engine.accKey().n.toString(16);
     }
     const stc = log.signedTreeState(engine.keys.secretKey, {
@@ -147,7 +169,7 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
       accN,
     });
     stcs.push(stc);
-    return stc;
+    return JSON.parse(JSON.stringify(stc));
   };
 
   // A witness with an admitted key signs the checkpoint's bytes. Each
@@ -157,8 +179,8 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     const stc = latestWitnessable();
     const witnessPub = publicKeyOf(witnessSecret);
     const statement = signWitnessStatement(witnessSecret, stc, witnesses.get(witnessPub) || null);
-    witnesses.set(witnessPub, statement);
-    return statement;
+    witnesses.set(witnessPub, JSON.parse(JSON.stringify(statement)));
+    return JSON.parse(JSON.stringify(statement));
   };
 
   engine.checkFork = (stcA, stcB) => {
@@ -170,7 +192,7 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
   engine.refuseAudit = (opts = {}) => {
     const refusal = signRefusal(engine.keys.secretKey, opts.at ?? now());
     refusals.push(refusal);
-    return refusal;
+    return JSON.parse(JSON.stringify(refusal));
   };
 
   // ---- disputes -----------------------------------------------------------
@@ -180,7 +202,12 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
   // a valid resolution exists beside it.
   engine.fileDispute = (secretKey, input) => {
     const dispute = signDispute(secretKey, input);
-    disputeBook.set(dispute.hash, { dispute, resolutions: [] });
+    // a dispute is filed ONCE (attack round two, API F5): re-filing an
+    // identical dispute used to overwrite the book entry and wipe its
+    // resolutions, flipping a settled dispute back to open.
+    if (!disputeBook.has(dispute.hash)) {
+      disputeBook.set(dispute.hash, { dispute, resolutions: [] });
+    }
     return dispute;
   };
 
@@ -205,6 +232,9 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
 
   // ---- queries ------------------------------------------------------------
 
+  // The timeline is a PUBLIC surface (attack round two, protocol F13a): an
+  // observer confined to publicState could not gate anything, because the
+  // revocation existed only if someone captured it at call time.
   engine.publicState = (opts = {}) => {
     const nowAt = opts.now ?? now();
     // the same key-timeline gate standing applies, applied here so every
@@ -234,6 +264,7 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
       sizeHistory: st.details.sizeHistory,
       rootAt: stc ? stc.body.root : '',
       standing: st,
+      keyTimeline: JSON.parse(JSON.stringify(keyTimeline)),
     };
   };
 
@@ -254,7 +285,7 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     const tree = makeTree(log.records.map((_, i) => log.leafBytes(i)));
     const leafBytes = log.leafBytes(index);
     const proof = tree.inclusionProof(index);
-    return {
+    const answer = {
       granted: true,
       leafBytes: toHex(leafBytes),
       proof: proof.map(toHex),
@@ -262,6 +293,11 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
       root: toHex(tree.mthAll()),
       check: verifyInclusionProof(leafBytes, index, log.records.length, proof, toHex(tree.mthAll())),
     };
+    // voidedness rides WITH the answer (attack round two, API F8): a
+    // consumer reading "granted" must not take it as "live deal"
+    const voidRow = log.voided.find((entry) => entry.record === log.records[index].record.hash);
+    if (voidRow) answer.voidedBy = voidRow.voided.hash;
+    return answer;
   };
 
   // The blind window: the SAME membership, proven without position and
@@ -274,7 +310,13 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
   engine.revealDealBlind = (dealId) => {
     const index = log.records.findIndex((row) => row.record.body.dealId === dealId);
     if (index < 0) return { granted: false, reason: 'not in log' };
-    const stc = stcs.filter(verifyCheckpoint).slice(-1)[0] || null;
+    // ONE trust gate for every surface: the blind answer only cites a
+    // checkpoint the key timeline still stands behind — the same gate
+    // publicState applies (attack round two, protocol F13b: the blind
+    // surface used to trust any verifying checkpoint, including one a
+    // revocation had retired).
+    const stc = stcs.filter((entry) => verifyCheckpoint(entry)
+      && keyTimelineResolve(keyTimeline, entry.key, entry.body.issuedAt).valid).slice(-1)[0] || null;
     if (!stc || !stc.body || !stc.body.accN || !stc.body.accRoot) {
       return { granted: false, reason: 'no published accumulator' };
     }
@@ -295,6 +337,9 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
       elem: elements[index],
       witness,
     };
+    // voidedness rides with the answer here too (API F8)
+    const voidRow = log.voided.find((entry) => entry.record === log.records[index].record.hash);
+    if (voidRow) answer.voidedBy = voidRow.voided.hash;
     // the answer proves itself the same way an auditor would check it
     if (!verifyBlindMembership(answer, answer.elem, answer.witness)) {
       return { granted: false, reason: 'the witness did not verify' };
@@ -318,6 +363,11 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
     signHop: (secretKeys, body) => signHop(secretKeys, body),
     verifyChain: verifyHopChain,
     truncate: (thatItemKeyPub) => {
+      // an identity is 64 hex chars — BIP340 x-only (attack round two, API
+      // F14: '[object Object]' used to end up inside a SIGNED lineage break)
+      if (typeof thatItemKeyPub !== 'string' || !/^[0-9a-f]{64}$/.test(thatItemKeyPub)) {
+        throw new Error('A title lineage needs its item public key: 64 lowercase hex chars.');
+      }
       const prior = (titles.get(thatItemKeyPub)?.hops || []).slice(-1)[0] || null;
       const hop = truncateTitleLineage(engine.keys.secretKey, prior, thatItemKeyPub, now());
       addHop(thatItemKeyPub, hop);

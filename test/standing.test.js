@@ -1,0 +1,112 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { generateKey } from '../src/keys.js';
+import { standing } from '../src/standing.js';
+import {
+  signCheckpoint, keyIdOf, signWitnessStatement, signRefusal, CADENCE_MS,
+} from '../src/checkpoint.js';
+import { makeTree } from '../src/merkle.js';
+import { encodeParts } from '../src/canonical.js';
+import { bytesHex } from './helpers.js';
+
+const vendor = generateKey();
+function witnessKey() { return generateKey(); }
+
+function realStc(at, { registry = [], rootSeed = 'x', size = 3, prevHead = '', seq = 1 } = {}) {
+  return signCheckpoint(vendor.secretKey, {
+    seq,
+    treeSize: size,
+    root: bytesHex(makeTree(Array.from({ length: size }, (_, i) => encodeParts([rootSeed, String(i)]))).mthAll()),
+    prevHead,
+    issuedAt: at,
+    keyId: keyIdOf(vendor.publicKey),
+    witnessRegistry: registry,
+  });
+}
+
+test('standing: nothing but a signed record — a claim, not standing', () => {
+  const st = standing({}, 0);
+  assert.equal(st.standing, 'vendor-signed-claim');
+  assert.equal(st.current, false);
+  assert.equal(st.neverAudited, true);
+});
+
+test('standing: witnessed checkpoint inside cadence = CURRENT', () => {
+  const w = witnessKey();
+  const at = 1_700_000_000_000;
+  const stc = realStc(at, { registry: [w.publicKey] });
+  const st = standing({
+    checkpoints: [stc],
+    witnessStatements: [signWitnessStatement(w.secretKey, stc)],
+  }, at + 1000);
+  assert.equal(st.current, true);
+  assert.equal(st.stale, false);
+  assert.equal(st.neverAudited, false);
+  assert.equal(st.details.extendsPrior, true);
+});
+
+test('standing: cadence decay is computed on the observer\'s clock', () => {
+  const w = witnessKey();
+  const at = 1_700_000_000_000;
+  const stc = realStc(at, { registry: [w.publicKey] });
+  const st = standing({
+    checkpoints: [stc],
+    witnessStatements: [signWitnessStatement(w.secretKey, stc)],
+  }, at + CADENCE_MS + 1);
+  assert.equal(st.current, false);
+  assert.equal(st.stale, true);
+});
+
+test('standing: an unwitnessed checkpoint never makes CURRENT', () => {
+  const at = 1_700_000_000_000;
+  const stc = realStc(at); // valid, but nobody witnessed it
+  const st = standing({ checkpoints: [stc] }, at + 1000);
+  assert.equal(st.current, false);
+  assert.equal(st.stale, true);
+});
+
+test('standing: continuity breaks when the head chain does not reach', () => {
+  const w = witnessKey();
+  const old = realStc(1_700_000_000_000, { registry: [w.publicKey], seq: 1, rootSeed: 'a' });
+  const fresh = realStc(1_700_000_100_000, { registry: [w.publicKey], seq: 2, rootSeed: 'b' }); // prevHead set to ''!
+  const st = standing({
+    checkpoints: [old, fresh],
+    witnessStatements: [signWitnessStatement(w.secretKey, fresh)],
+  }, 1_700_000_200_000);
+  assert.equal(st.details.extendsPrior, false);
+  // rewrote history and it shows: the line is stale, silently rebuilt
+  assert.equal(st.current, true, 'fresh within cadence');
+  assert.equal(st.details.extendsPrior, false, 'but the chain is broken');
+});
+
+test('standing: fork evidence marks FORKED while everything else still computes', () => {
+  const w = witnessKey();
+  const at = 1_700_000_000_000;
+  const stc = realStc(at, { registry: [w.publicKey], prevHead: 'aa' });
+  const st = standing({
+    checkpoints: [stc],
+    witnessStatements: [signWitnessStatement(w.secretKey, stc)],
+    forkEvidence: [JSON.parse(JSON.stringify({ a: { prevHead: 'aa', body: { prevHead: 'aa' } }, b: { prevHead: 'aa', body: { prevHead: 'aa' } } }))],
+  }, at + 1000);
+  // the fake evidence does NOT verify: forked stays false, current still computes
+  assert.equal(st.forked, false);
+  assert.equal(st.current, true);
+});
+
+test('standing: signed refusal ages like staleness; unsigned refusal is refused', () => {
+  const at = 1_700_000_000_000;
+  const signed = signRefusal(vendor.secretKey, at);
+  const fresh = standing({ refusals: [signed] }, at + 1000);
+  assert.equal(fresh.refused, true, 'a fresh signed refusal shows');
+  const old = standing({ refusals: [signed] }, at + CADENCE_MS + 1);
+  assert.equal(old.refused, false, 'an old refusal is cold, not damning');
+});
+
+test('standing: voided deals sit beside the count — no decrement, ever', () => {
+  const at = 1_700_000_000_000;
+  const st = standing({
+    voided: [{ record: 'h1' }, { record: 'h2' }],
+  }, at);
+  assert.equal(st.details.voidedCount, 2, 'voids stay visible');
+  assert.equal(st.standing, 'vendor-signed-claim');
+});

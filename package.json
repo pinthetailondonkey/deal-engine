@@ -1,0 +1,20 @@
+{
+  "name": "deal-engine",
+  "version": "1.0.0",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "type": "module",
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "^2.4.0"
+  }
+}

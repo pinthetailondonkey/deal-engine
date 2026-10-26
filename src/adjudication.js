@@ -1,6 +1,6 @@
 import { canonicalBytes, bytesToHex, H } from './canonical.js';
 import { sign, verify, publicKeyOf } from './keys.js';
-import { verifyWitnessStatement } from './checkpoint.js';
+import { verifyWitnessStatement, verifyForkEvidence } from './checkpoint.js';
 import { keyTimelineResolve } from './rotation.js';
 
 // Fork adjudication — an evaluator, not a verdict machine.
@@ -27,6 +27,18 @@ import { keyTimelineResolve } from './rotation.js';
 export const ADMISSION_TAG = 'Deal fork admission v1';
 
 export function adjudicateFork(evidence, statements = [], opts = {}) {
+  // Standing in the door: the input must BE fork evidence — both sides
+  // verify as checkpoints, heads differ, they claim one parent. The
+  // standing module grades this before calling, but adjudicateFork is
+  // exported, and a direct caller passing a degenerate pair
+  // ({a: stc, b: stc}) got a `fork-proved` verdict out of ONE honest
+  // statement: with a side-equals-b, the same checkpoint matched both
+  // sides and a single witness statement was read as signing the split.
+  // Attack round three (residual): evidence is arrived at, never assumed —
+  // unevidenced input grades adjudication-open, flagged in reason.
+  if (!verifyForkEvidence(evidence)) {
+    return { verdict: 'adjudication-open', sharedWitness: null, reason: 'unevidenced' };
+  }
   if (!evidence?.a || !evidence?.b) return { verdict: 'adjudication-open', sharedWitness: null };
   // statements are re-verified through the FULL witness machinery — not just
   // the signature. A statement counts only if the machinery that admits

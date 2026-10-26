@@ -168,6 +168,41 @@ test('standing: FORKED only for proved forks; equal-strength suspicion stays vis
   assert.equal(open.adjudication, 'open');
 });
 
+// Attack round three (residual): adjudicateFork is exported, and a direct
+// caller controlled its evidence input. It trusted what it was handed — a
+// degenerate pair {a, b: same checkpoint} turned ONE honest witness
+// statement into a fork-proved verdict, because both "sides" matched.
+test('adjudication: the evidence itself must verify — a degenerate or forged pair proves nothing', () => {
+  const w = pair();
+  const { evidence, a, b } = forkShape({ registryA: [w.publicKey], registryB: [w.publicKey] });
+  const statements = [signWitnessStatement(w.secretKey, a), signWitnessStatement(w.secretKey, b)];
+
+  // degenerate: both sides are the SAME checkpoint
+  const degenerate = { a, b: a };
+  const verdict = adjudicateFork(degenerate, [signWitnessStatement(w.secretKey, a)]);
+  assert.equal(verdict.verdict, 'adjudication-open');
+  assert.equal(verdict.reason, 'unevidenced');
+
+  // forged: one side is not a checkpoint at all
+  const bent = { a: { ...a, body: '🔫' }, b };
+  const bentVerdict = adjudicateFork(bent, statements);
+  assert.equal(bentVerdict.verdict, 'adjudication-open');
+  assert.equal(bentVerdict.reason, 'unevidenced');
+
+  // same-side-parent (a real line, not a fork) is refused too — evidence
+  // requires both sides to share ONE parent and conflict on content
+  const { a: parentA, b: childB } = (() => {
+    const vendorPair = pair();
+    const parent = stc(vendorPair, { seed: 'base' });
+    const child = stc(vendorPair, { seed: 'base', seq: 2, treeSize: 9, prevHead: parent.head });
+    return { a: parent, b: child };
+  })();
+  assert.equal(adjudicateFork({ a: parentA, b: childB }, []).reason, 'unevidenced');
+
+  // control: honest evidence still proves the fork through the same door
+  assert.equal(adjudicateFork(evidence, statements).verdict, 'fork-proved');
+});
+
 // Attack round three (protocol P1): the freshness path gated a revoked
 // witness key's statements out, but adjudication graded the very same
 // statements as fork-proved and CLOSED the fork — a permanent accusation

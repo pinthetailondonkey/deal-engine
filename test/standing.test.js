@@ -7,7 +7,7 @@ import {
   forkEvidence,
 } from '../src/checkpoint.js';
 import { makeTree } from '../src/merkle.js';
-import { encodeParts } from '../src/canonical.js';
+import { encodeParts, bytesToHex, H, canonicalBytes } from '../src/canonical.js';
 import { bytesHex } from './helpers.js';
 
 const vendor = generateKey();
@@ -131,9 +131,19 @@ test('standing: signed refusal ages like staleness; unsigned refusal is refused'
 
 test('standing: voided deals sit beside the count — no decrement, ever', () => {
   const at = 1_700_000_000_000;
+  // structurally-signed void statements count; garbage does not (F13)
+  const body = (record, atV) => ({ v: 1, voids: record, reason: 'refunded', at: atV });
+  const voided = (record) => {
+    const b = body(record, at);
+    return {
+      v: 1, tag: 'Deal void v1',
+      hash: bytesToHex(H('Deal void v1', canonicalBytes(b))),
+      body: b, sigs: { buyer: 'ff'.repeat(64) },
+    };
+  };
   const st = standing({
-    voided: [{ record: 'h1' }, { record: 'h2' }],
+    voided: [voided('h1'), voided('h2'), '🔫', { record: 'not-a-void' }],
   }, at);
-  assert.equal(st.details.voidedCount, 2, 'voids stay visible');
+  assert.equal(st.details.voidedCount, 2, 'signed voids stay visible; emoji and junk do not count');
   assert.equal(st.standing, 'vendor-signed-claim');
 });

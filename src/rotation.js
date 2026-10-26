@@ -116,8 +116,12 @@ export function verifyRevocation(revocation) {
 export function keyTimelineResolve(timeline, publicKey, time) {
   const entries = (timeline || []).filter((e) => e && e.publicKey === publicKey);
   if (entries.length === 0) return { valid: false, reason: 'unknown' };
-  // one key appears once in a timeline by convention; last entry wins
-  const entry = entries[entries.length - 1];
+  // one key appears once in an honest timeline. A duplicate is itself an
+  // accusation: appending an {until: null} entry after a revocation used to
+  // resurrect the key (attack round two, protocol F3) — so duplicates resolve
+  // to nothing instead of "last one wins".
+  if (entries.length > 1) return { valid: false, reason: 'duplicated' };
+  const entry = entries[0];
   if (time < entry.from) return { valid: false, reason: 'not yet' };
   if (!entry.until) return { valid: true, role: entry.kind };
   if (time >= entry.until.at) {
@@ -127,8 +131,10 @@ export function keyTimelineResolve(timeline, publicKey, time) {
 }
 
 // Fork-evidence gate for standing.js: an evidence object counts only if
-// BOTH its checkpoints were signed by keys that were valid at their own
-// issue time. Returns 'genuine' | 'suspect'.
+// BOTH its checkpoints were signed by keys that were valid VENDOR keys at
+// their own issue time (role-blind admissions used to let a foreign key
+// listed on the timeline witness checkpoints — attack round two, F3.2).
+// Returns 'genuine' | 'suspect'.
 export function forkEvidenceGrade(evidence, timeline) {
   if (!evidence?.a || !evidence?.b) return 'suspect';
   for (const side of [evidence.a, evidence.b]) {
@@ -136,7 +142,7 @@ export function forkEvidenceGrade(evidence, timeline) {
     const key = side?.key;
     if (!Number.isInteger(at) || !key) return 'suspect';
     const resolved = keyTimelineResolve(timeline, key, at);
-    if (!resolved.valid) return 'suspect';
+    if (!resolved.valid || resolved.role !== 'vendor') return 'suspect';
   }
   return 'genuine';
 }

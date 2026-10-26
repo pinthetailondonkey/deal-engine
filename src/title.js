@@ -13,6 +13,14 @@ import { sign, verify, publicKeyOf, deriveItemKey } from './keys.js';
 //   an external attestation the engine records and requires, never an
 //   engine-computed truth. Honest limitation, stated in the code that would
 //   otherwise hide it.
+// - ANCHOR ATTESTATION IS NOT ENFORCED. The anchor hop's signature rule
+//   (requiredSignersFor: 'to' signs) proves only that the named registry
+//   key accepted the hop — it does NOT prove any check was performed on
+//   the physical item, and the engine has no way to demand one. A registry
+//   key can sign an anchor for an item it never saw. Any consumer who
+//   reads an anchor hop as "a registry verified this item" is reading
+//   something the engine never guaranteed; the attestation's strength is
+//   entirely the registry's own out-of-band procedure, outside this code.
 
 export const HOP_TAG = 'Title hop v1';
 export const DISPUTE_ATTACH_TAG = 'Title dispute attach v1';

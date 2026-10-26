@@ -5,6 +5,17 @@ import { concatBytes } from './canonical.js';
 // CHAR-0x00 prefix on leaves, 0x01 on interior nodes, domain-separated keep
 // leaf-as-interior replay impossible, and consistency proofs make
 // "extends prior" a mathematical check, not a social claim with a checkmark.
+//
+// Deviation from the RFC, stated because it matters for interop (PoT v2):
+// the tree follows RFC 6962's hashing and MTH shape, but its consistency
+// proofs and verifier are this module's own and are NOT byte-compatible
+// with a Certificate-Transparency implementation. RFC 6962 §2.1.2 derives
+// the proof path differently for some (m, n) splits; this verifier accepts
+// this module's own proof shape only (and an m = n pair only as the empty
+// proof with identical roots). It is self-consistent — every (m, n) grid
+// position is pinned in merkle.test.js — but a proof produced here will be
+// rejected by a CT verifier and vice versa. If PoT v2 ever needs to
+// interoperate with real CT logs, this module is the one that changes.
 
 const EMPTY_ROOT = sha256(new Uint8Array(0)); // SHA-256 of nothing, per RFC 6962
 

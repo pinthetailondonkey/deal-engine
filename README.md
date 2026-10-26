@@ -68,6 +68,29 @@ count is a self-declared, witnessed tree size, worded exactly that way.
 
 ## Known scope limits (stated, not hidden)
 
+These are written into the module docs themselves — the code that carries
+each limit is where the honest sentence lives:
+
+- **Backdating window** (`rotation.js`): timestamps are self-claimed. A
+  thief with a stolen live key can forge bodies dated before the
+  revocation; the forgery window is bounded only by the revocation tick
+  itself. Closing it needs timestamps from outside the key holder.
+- **Rotation-tick false alarm** (`rotation.js`): a body dated at the exact
+  millisecond of a rotation or revocation is refused, on purpose — an
+  honest signer hitting the exact tick also gets refused, visibly, and
+  re-issues clean one millisecond later.
+- **RFC 6962 consistency-proof shape** (`merkle.js`): hashing matches the
+  RFC; the consistency-proof shape is this module's own. Self-consistent,
+  pinned by tests, but NOT interoperable with a Certificate-Transparency
+  implementation. If PoT v2 needs real CT interop, this module changes.
+- **canonical() non-injectivity** (`canonical.js`): distinct values can
+  render the same bytes (`null`/`undefined`, `NaN`/`Infinity`). Every
+  signed body is built by a validating *Body() constructor first — any new
+  signed surface must keep that discipline.
+- **Anchor attestation not enforced** (`title.js`): an anchor hop proves a
+  registry key signed it, never that the registry checked the item. The
+  attestation's strength lives entirely outside this code.
+
 - Salt provenance: closed. The vendor always brings fresh bytes; the buyer
   MAY contribute at least 8 bytes and the stored salt is
   `H('Deal salt mix v1', vendorSalt, buyerSalt)` — never a concatenation

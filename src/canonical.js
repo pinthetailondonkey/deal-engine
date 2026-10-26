@@ -49,6 +49,16 @@ export function concatBytes(list) {
 export function canonical(value) {
   // Keys sorted, no whitespace, arrays in order. A float is not a coin amount;
   // amounts must already be strings on the way in.
+  //
+  // Landmine, known and deliberate: canonical() is NOT injective — distinct
+  // values can render the same bytes. `null` and `undefined` both render ''
+  // (so ['a', null] and ['a', undefined] are the same bytes, and an object
+  // whose value is undefined drops the key entirely); NaN and ±Infinity
+  // render 'null' via JSON.stringify. In practice the engine never feeds
+  // these values to a signature: every signed body is built by a *Body()
+  // constructor that validates types first. But any NEW signed surface must
+  // keep that discipline — do not sign caller-shaped objects raw, and do
+  // not treat canonical-equal as deep-equal.
   if (value == null) return '';
   if (typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;

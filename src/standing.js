@@ -12,6 +12,13 @@ import { bytesToHex, H, canonicalBytes } from './canonical.js';
 // fields degrade instead of crashing; a vendor clock cannot confirm the
 // FUTURE; refusals keep their history after they age out; void lines count
 // only when they are structurally signed things.
+//
+// Standing can be computed only from what the evidence SAYS. Honest limit:
+// timestamps inside bodies are self-claimed, so a thief with a stolen live
+// key can forge bodies dated before their revocation and this view cannot
+// tell — the forgery window is bounded only by the revocation tick (see
+// rotation.js, BACKDATING WINDOW). The lifecycle here is honest about the
+// evidence, never about the world.
 
 // The checks live in priority order; the first match wins, but everything
 // the evidence supports gets reported too.

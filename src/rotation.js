@@ -18,6 +18,28 @@ import { sign, verify, publicKeyOf } from './keys.js';
 // - Fork evidence produced entirely by a revoked key is suspect, not a
 //   verdict — standing refuses to call it FORKED. That rule is the libel
 //   defense: permanent accusations must not come from a stolen key.
+//
+// Two honest limits, stated here because this module is where they live:
+//
+// - BACKDATING WINDOW. Timestamps are self-claimed — a signed body carries
+//   whatever `at` its signer wrote. A thief who stole a live key can forge
+//   checkpoints dated BEFORE the revocation: `keyTimelineResolve` scores a
+//   body at its own claimed time, so a forged body claiming an earlier
+//   moment reads `valid`. What bounds the damage is only the revocation
+//   tick itself: the forged window is (last honest checkpoint, revocation
+//   time). Nothing in the engine closes this — closing it needs timestamps
+//   from outside the key holder (witness co-timing, an anchor, a chain).
+//   Callers presenting standing should say the revocation time is exact
+//   but the boundary between honest and forged history is the signer's
+//   word.
+// - ROTATION-TICK FALSE ALARM. `keyTimelineResolve` uses `time >= until.at`
+//   on purpose: at the exact millisecond of a rotation or revocation the
+//   old key is already dead, and a body claiming that exact time is refused.
+//   An HONEST signer whose clock fires a checkpoint at exactly the tick
+//   also gets refused — a rare, visible false alarm, chosen over the
+//   alternative (`>`) which would give a thief the same millisecond. The
+//   refusal reason ('retired'/'revoked') names the tick, so an honest
+//   signer re-issuing one millisecond later is clean.
 
 export const ROTATION_TAG = 'Deal rotation v1';
 export const REVOCATION_TAG = 'Deal revocation v1';

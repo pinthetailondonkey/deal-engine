@@ -9,6 +9,7 @@ import {
 import { makeTree } from '../src/merkle.js';
 import { encodeParts, bytesToHex, H, canonicalBytes } from '../src/canonical.js';
 import { signRotation } from '../src/rotation.js';
+import { truncateTitleLineage, hopBody, signHop, HOP_TAG, itemKeyPair } from '../src/title.js';
 import { bytesHex } from './helpers.js';
 
 const vendor = generateKey();
@@ -155,6 +156,47 @@ test('standing: voided deals sit beside the count — no decrement, ever', () =>
 // spoke on every post-revocation checkpoint. Inheritance now rides a LIVE
 // source seat: a key the timeline retired before this checkpoint passes
 // its seat to no one; the successor must be listed in a registry instead.
+// Attack round three (protocol P3): headline flags computed from ANY truthy
+// value. `truncated` takes a verifiable signed truncation hop only;
+// `breached` takes a real boolean only — garbage lands in details, never
+// in the verdicts.
+test('standing: truncated and breached take signed facts, not truthy garbage', () => {
+  const vendor = generateKey();
+  const item = itemKeyPair(vendor.secretKey, 'imei-p3');
+  const born = signHop([vendor.secretKey, item.secretKey], hopBody({
+    kind: 'born', itemKey: item.publicKey, priorHead: '',
+    from: vendor.publicKey, to: item.publicKey, at: 1_700_000_000_000,
+  }));
+  const truncation = truncateTitleLineage(item.secretKey, born, item.publicKey, 1_700_100_000_000);
+
+  // the honest case: the signed break gradeS
+  const honest = standing({ truncation }, 1_700_100_000_100);
+  assert.equal(honest.truncated, true);
+  assert.deepEqual(honest.details.truncationAt, [{ at: 1_700_100_000_000, priorHead: born.hash }]);
+
+  // the attack case: garbage used to flip the flag
+  for (const garbage of [{}, 1, 'yes', [], { kind: 'truncation', at: 1 }]) {
+    const st = standing({ truncation: garbage }, 0);
+    assert.equal(st.truncated, false, `${JSON.stringify(garbage)} grades nothing`);
+    assert.equal(st.details.truncationInvalid, true, `${JSON.stringify(garbage)} is flagged`);
+  }
+  // a SIGNED flip hop is still not a truncation
+  const buyer = generateKey();
+  const flip = signHop([vendor.secretKey, buyer.secretKey], hopBody({
+    kind: 'flip', itemKey: item.publicKey, priorHead: born.hash,
+    from: vendor.publicKey, to: buyer.publicKey, at: 1_700_200_000_000,
+  }));
+  assert.equal(standing({ truncation: flip }, 0).truncated, false);
+
+  // breached: true works, truthy garbage does not
+  assert.equal(standing({ breached: true }, 0).breached, true);
+  assert.equal(standing({ breached: {} }, 0).breached, false);
+  assert.equal(standing({ breached: 1 }, 0).details.breachedInvalid, true);
+  // false and absent stay clean — no invalid flag noise
+  assert.equal(standing({ breached: false }, 0).details.breachedInvalid, undefined);
+  assert.equal(standing({}, 0).details.breachedInvalid, undefined);
+});
+
 test('standing: a laundered rotation cannot seat a successor from a revoked key', () => {
   const w = witnessKey();        // honest key later stolen
   const successor = witnessKey(); // the thief's fresh key

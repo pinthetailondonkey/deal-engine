@@ -1,6 +1,7 @@
 import { verifyCheckpoint, verifyWitnessStatement, verifyRefusal, CADENCE_MS, verifyForkEvidence } from './checkpoint.js';
 import { keyTimelineResolve, forkEvidenceGrade } from './rotation.js';
 import { adjudicateFork } from './adjudication.js';
+import { verifyHop, HOP_TAG } from './title.js';
 import { bytesToHex, H, canonicalBytes } from './canonical.js';
 
 // Standing: the 7-state lifecycle, computed from evidence in front of the
@@ -153,11 +154,27 @@ export function standing(view, now) {
   }
 
   // TRUNCATED: the vendor attested that history ends at a stated checkpoint.
-  if (view.truncation) out.truncated = true;
+  // The claim must be a SIGNED truncation hop — right tag, right kind,
+  // item-key-signed per the self-proving rule — not any truthy object
+  // (attack round three, protocol P3: `view.truncation = {}` or `= 1` used
+  // to flip the headline flag). Garbage is flagged in details, never graded.
+  const truncations = arr(view.truncation ? [].concat(view.truncation) : []).filter(truncationLooksSigned);
+  if (truncations.length > 0) {
+    out.truncated = true;
+    out.details.truncationAt = truncations.map((hop) => ({ at: hop.body.at, priorHead: hop.body.priorHead }));
+  } else if (view.truncation) {
+    out.details.truncationInvalid = true;
+  }
 
   // BREACHED: computed only by a granted evidence window — an accumulated
-  // verdict that a claim was contradicted. Not this module's call alone.
-  if (view.breached) out.breached = true;
+  // verdict that a claim was contradicted. Not this module's call alone, so
+  // it cannot be re-verified here — but it is a VERDICT, a boolean, never a
+  // truthy shorthand (protocol P3: an empty object used to read as a
+  // breach).
+  if (view.breached === true) out.breached = true;
+  else if (view.breached !== undefined && view.breached !== null && view.breached !== false) {
+    out.details.breachedInvalid = true;
+  }
 
   // REFUSED: a signed refusal that ages like staleness. The refusal must
   // still be remembered after it stops screaming (attack round two, F9:
@@ -179,6 +196,20 @@ export function standing(view, now) {
   }
 
   return out;
+}
+
+// A truncation claim counts only if it is a verifiable signed title hop:
+// right tag, truncation kind, self-signed by the item key (attack round
+// three, protocol P3 — the headline flag used to take any truthy value).
+function truncationLooksSigned(entry) {
+  try {
+    if (!entry?.body || entry.tag !== HOP_TAG) return false;
+    if (entry.body.kind !== 'truncation') return false;
+    if (entry.body.from !== entry.body.itemKey) return false;
+    return verifyHop(entry);
+  } catch {
+    return false;
+  }
 }
 
 function extendsPrior(checkpoints) {

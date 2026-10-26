@@ -8,6 +8,7 @@ import { bytesHex } from './helpers.js';
 import { adjudicateFork } from '../src/adjudication.js';
 import { sign } from '../src/keys.js';
 import { canonicalBytes } from '../src/canonical.js';
+import { signRotation } from '../src/rotation.js';
 
 const t0 = 1_700_000_000_000;
 
@@ -74,6 +75,39 @@ test('adjudication: a forged statement on one side cannot buy a shared witness',
   assert.equal(verdict.verdict, 'adjudication-open', 'statement signatures are re-checked, not trusted');
 });
 
+// Attack round two (s3c): sig-only filtering let a STRANGER'S OWN key, whose
+// signatures verify perfectly, close any fork. Admission must be checked.
+test('adjudication: a stranger key with valid signatures still cannot prove the fork', () => {
+  const stranger = pair();
+  const { evidence, a, b } = forkShape({}); // witness registries are empty
+  const bodyA = { v: 1, stcHead: a.head, witnessTime: a.body.issuedAt, prevStcHead: '' };
+  const bodyB = { v: 1, stcHead: b.head, witnessTime: b.body.issuedAt, prevStcHead: '' };
+  const statements = [
+    { v: 1, tag: 'Deal witness v1', witness: stranger.publicKey, body: bodyA, sig: sign(stranger.secretKey, canonicalBytes(bodyA)) },
+    { v: 1, tag: 'Deal witness v1', witness: stranger.publicKey, body: bodyB, sig: sign(stranger.secretKey, canonicalBytes(bodyB)) },
+  ];
+  const verdict = adjudicateFork(evidence, statements);
+  assert.equal(verdict.verdict, 'adjudication-open',
+    'a key admitted NOWHERE cannot speak, however well-formed its statement');
+});
+
+test('adjudication: a rotated witness still counts through the rotation chain', () => {
+  const w1 = pair();
+  const w2 = pair();
+  const { evidence, a, b } = forkShape({ registryA: [w1.publicKey], registryB: [w1.publicKey] });
+  const rotation = signRotation(w1.secretKey, w2.secretKey, 'witness', a.body.issuedAt - 1000);
+  // w2 was not yet in either registry — the statement is signed by hand,
+  // and admission is proven by the rotation chain at verify time
+  const statement = (side) => {
+    const body = { v: 1, stcHead: side.head, witnessTime: side.body.issuedAt, prevStcHead: '' };
+    return { v: 1, tag: 'Deal witness v1', witness: w2.publicKey, body, sig: sign(w2.secretKey, canonicalBytes(body)) };
+  };
+  const verdict = adjudicateFork(evidence, [statement(a), statement(b)], { witnessRotations: [rotation] });
+  assert.equal(verdict.verdict, 'fork-proved', 'inheritance through a dual-signed rotation holds');
+  // control: WITHOUT the rotation the same statements say nothing
+  assert.equal(adjudicateFork(evidence, [statement(a), statement(b)]).verdict, 'adjudication-open');
+});
+
 test('adjudication: the vendor can end it — a self-signed admission keeps one line and drops the other', async () => {
   const { signVendorAdmission, verifyVendorAdmission } = await import('../src/adjudication.js');
   const { vendorPair, evidence, a, b } = forkShape({});
@@ -86,6 +120,25 @@ test('adjudication: the vendor can end it — a self-signed admission keeps one 
   assert.equal(adjudicateFork(evidence, [], { vendorAdmission: strangerAdmission }).verdict, 'adjudication-open',
     'a stranger cannot adjudicate someone else\'s fork');
   assert.equal(adjudicateFork(evidence, [], { vendorAdmission: admission }).verdict, 'vendor-confirmed');
+});
+
+// Attack round two (s3 section C): a stolen key the timeline later revokes
+// must not get the final word through a signed admission.
+test('adjudication: a since-revoked key cannot close via the admission', async () => {
+  const { signVendorAdmission } = await import('../src/adjudication.js');
+  const { keyTimelineResolve } = await import('../src/rotation.js');
+  const { vendorPair, evidence, a, b } = forkShape({});
+  const revokeAt = t0 + 1000;
+  const timeline = [
+    { kind: 'vendor', publicKey: vendorPair.publicKey, from: 0, until: { kind: 'revoked', at: revokeAt } },
+  ];
+  const original = signVendorAdmission(vendorPair.secretKey, { keep: a.head, drop: b.head, at: t0 + 5000 });
+  assert.equal(keyTimelineResolve(timeline, vendorPair.publicKey, original.body.at).valid, false,
+    'the stolen-key gate sees the revocation');
+  assert.equal(adjudicateFork(evidence, [], { vendorAdmission: original, keyTimeline: timeline }).verdict,
+    'adjudication-open', 'a thief holding a revoked key does not choose the kept line');
+  // control: without a timeline the convention holds, and the admission closes
+  assert.equal(adjudicateFork(evidence, [], { vendorAdmission: original }).verdict, 'vendor-confirmed');
 });
 
 test('standing: FORKED only for proved forks; equal-strength suspicion stays visible, un-accused', async () => {

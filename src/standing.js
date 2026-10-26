@@ -52,7 +52,11 @@ export function standing(view, now) {
     ? evidence.filter((e) => forkEvidenceGrade(e, view.keyTimeline) === 'genuine')
     : evidence.slice();
   const suspect = evidence.filter((e) => !genuine.includes(e));
-  const opts = { vendorAdmission: view.vendorAdmission };
+  const opts = {
+    vendorAdmission: view.vendorAdmission,
+    witnessRotations: view.witnessRotations || [],
+    keyTimeline: view.keyTimeline || null,
+  };
   const verdicts = genuine.map((e) => adjudicateFork(e, view.witnessStatements || [], opts));
   const proved = genuine.filter((e, i) => ['fork-proved', 'vendor-confirmed'].includes(verdicts[i].verdict));
   if (proved.length > 0) {

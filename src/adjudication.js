@@ -1,5 +1,7 @@
 import { canonicalBytes, bytesToHex, H } from './canonical.js';
 import { sign, verify, publicKeyOf } from './keys.js';
+import { verifyWitnessStatement } from './checkpoint.js';
+import { keyTimelineResolve } from './rotation.js';
 
 // Fork adjudication — an evaluator, not a verdict machine.
 //
@@ -26,11 +28,22 @@ export const ADMISSION_TAG = 'Deal fork admission v1';
 
 export function adjudicateFork(evidence, statements = [], opts = {}) {
   if (!evidence?.a || !evidence?.b) return { verdict: 'adjudication-open', sharedWitness: null };
-  // statements are re-verified per witness key before they may speak
+  // statements are re-verified through the FULL witness machinery — not just
+  // the signature. A statement counts only if the machinery that admits
+  // witnesses accepts it against the side it names: the tag, the stcHead
+  // binding, witnessTime, and admission (registry or dual-signed rotation).
+  // Attack round two showed the signature-only filter let a stranger key
+  // with valid signatures over {stcHead} drive FORKED.
+  const sideOf = (statement) => {
+    if (statement.body.stcHead === evidence.a.head) return evidence.a;
+    if (statement.body.stcHead === evidence.b.head) return evidence.b;
+    return null;
+  };
   const genuine = (statements || []).filter((statement) => {
     try {
-      return verify(statement.sig, canonicalBytes(statement.body), statement.witness)
-        && (statement.body.stcHead === evidence.a.head || statement.body.stcHead === evidence.b.head);
+      const side = sideOf(statement);
+      if (!side) return false;
+      return verifyWitnessStatement(side, statement, opts.witnessRotations || []);
     } catch {
       return false;
     }
@@ -43,16 +56,22 @@ export function adjudicateFork(evidence, statements = [], opts = {}) {
   }
 
   // vendor admission path: the admission must be signed by the key that
-  // signed the checkpoints, and name this split
+  // signed the checkpoints, name this split, and — when the view carries a
+  // key timeline — the signer must STILL be a live vendor key at the
+  // admission's own time (a thief holding a since-revoked key does not get
+  // the final word).
   const vendorAdmission = opts?.vendorAdmission;
   if (vendorAdmission && verifyVendorAdmission(vendorAdmission)) {
     const signer = vendorAdmission.key;
-    if (vendorAdmission.body.keep === evidence.a.head
+    const signerLive = opts?.keyTimeline
+      ? keyTimelineResolve(opts.keyTimeline, signer, vendorAdmission.body.at).valid === true
+      : true;
+    if (signerLive && vendorAdmission.body.keep === evidence.a.head
       && vendorAdmission.body.drop === evidence.b.head
       && signer === evidence.a.key) {
       return { verdict: 'vendor-confirmed', kept: evidence.a.head };
     }
-    if (vendorAdmission.body.keep === evidence.b.head
+    if (signerLive && vendorAdmission.body.keep === evidence.b.head
       && vendorAdmission.body.drop === evidence.a.head
       && signer === evidence.b.key) {
       return { verdict: 'vendor-confirmed', kept: evidence.b.head };

@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKey } from '../src/keys.js';
+import { generateKey, sign } from '../src/keys.js';
 import { standing } from '../src/standing.js';
 import {
   signCheckpoint, keyIdOf, signWitnessStatement, signRefusal, CADENCE_MS,
-  forkEvidence,
+  forkEvidence, WITNESS_TAG,
 } from '../src/checkpoint.js';
 import { makeTree } from '../src/merkle.js';
 import { encodeParts, bytesToHex, H, canonicalBytes } from '../src/canonical.js';
+import { signRotation } from '../src/rotation.js';
 import { bytesHex } from './helpers.js';
 
 const vendor = generateKey();
@@ -146,4 +147,56 @@ test('standing: voided deals sit beside the count — no decrement, ever', () =>
   }, at);
   assert.equal(st.details.voidedCount, 2, 'signed voids stay visible; emoji and junk do not count');
   assert.equal(st.standing, 'vendor-signed-claim');
+});
+
+// Attack round three (protocol P7): one dual-signed rotation dated inside
+// the pre-revocation window used to seat the thief's fresh key forever —
+// 'unknown' on the timeline counted as "not revoked", so the successor
+// spoke on every post-revocation checkpoint. Inheritance now rides a LIVE
+// source seat: a key the timeline retired before this checkpoint passes
+// its seat to no one; the successor must be listed in a registry instead.
+test('standing: a laundered rotation cannot seat a successor from a revoked key', () => {
+  const w = witnessKey();        // honest key later stolen
+  const successor = witnessKey(); // the thief's fresh key
+  const at = 1_700_000_000_000;
+  const revokeAt = at + 1000;
+  // the vendor honestly lists w in the registry of a post-revocation checkpoint
+  const stc = realStc(at + 9000, { registry: [w.publicKey] });
+  const rotation = signRotation(w.secretKey, successor.secretKey, 'witness', revokeAt - 1);
+  // the thief signs its own statement — signWitnessStatement refuses
+  // non-registry keys, which is exactly the front door the laundering
+  // rotation was supposed to open
+  const thiefBody = {
+    v: 1,
+    stcHead: stc.head,
+    witnessTime: stc.body.issuedAt,
+    prevStcHead: '',
+  };
+  const sSuccessor = {
+    v: 1,
+    tag: WITNESS_TAG,
+    witness: successor.publicKey,
+    body: thiefBody,
+    sig: sign(successor.secretKey, canonicalBytes(thiefBody)),
+  };
+  const view = {
+    checkpoints: [stc],
+    witnessStatements: [sSuccessor],
+    witnessRotations: [rotation],
+    forkEvidence: [],
+    refusals: [],
+    sizeHistory: [],
+    keyTimeline: [
+      { kind: 'vendor', publicKey: vendor.publicKey, from: 0, until: null },
+      { kind: 'witness', publicKey: w.publicKey, from: 0, until: { kind: 'revoked', at: revokeAt } },
+    ],
+    voided: [],
+  };
+  const st = standing(view, at + 90_000);
+  assert.equal(st.neverAudited, true, 'a revoked key seats nobody');
+  // control: the vendor ACKNOWLEDGES the successor by listing it — it speaks
+  const stc2 = realStc(at + 9000, { registry: [successor.publicKey], seq: 2 });
+  const s2 = signWitnessStatement(successor.secretKey, stc2);
+  const st2 = standing({ ...view, checkpoints: [stc2], witnessStatements: [s2] }, at + 90_000);
+  assert.equal(st2.neverAudited, false, 'a listed successor speaks');
 });

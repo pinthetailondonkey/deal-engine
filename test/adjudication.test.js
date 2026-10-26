@@ -167,3 +167,24 @@ test('standing: FORKED only for proved forks; equal-strength suspicion stays vis
   assert.equal(open.suspectedForkEvidence, true, 'but the incompatible lines are not hidden either');
   assert.equal(open.adjudication, 'open');
 });
+
+// Attack round three (protocol P1): the freshness path gated a revoked
+// witness key's statements out, but adjudication graded the very same
+// statements as fork-proved and CLOSED the fork — a permanent accusation
+// produced post-revocation by a retired key. The statement gate now runs
+// wherever the machinery runs.
+test('adjudication: a revoked witness key cannot close the fork through the statement path', () => {
+  const w = pair();
+  const vendorPair = pair();
+  const at = t0 + 200; // both sides dated AFTER the revocation below
+  const a = stc(vendorPair, { seed: 'lineA', at, registry: [w.publicKey] });
+  const b = stc(vendorPair, { seed: 'lineB', seq: 2, treeSize: 9, prevHead: '', at, registry: [w.publicKey] });
+  const evidence = forkEvidence(a, b);
+  const statements = [signWitnessStatement(w.secretKey, a), signWitnessStatement(w.secretKey, b)];
+  const timeline = [
+    { kind: 'witness', publicKey: w.publicKey, from: 0, until: { kind: 'revoked', at: t0 + 100 } },
+  ];
+  assert.equal(adjudicateFork(evidence, statements, { keyTimeline: timeline }).verdict, 'adjudication-open');
+  // control: with no timeline in view the machine is unchanged
+  assert.equal(adjudicateFork(evidence, statements, {}).verdict, 'fork-proved');
+});

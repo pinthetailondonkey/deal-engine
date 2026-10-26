@@ -43,7 +43,9 @@ export function adjudicateFork(evidence, statements = [], opts = {}) {
     try {
       const side = sideOf(statement);
       if (!side) return false;
-      return verifyWitnessStatement(side, statement, opts.witnessRotations || []);
+      return verifyWitnessStatement(side, statement, opts.witnessRotations || [], {
+        keyTimeline: opts.keyTimeline || null,
+      });
     } catch {
       return false;
     }

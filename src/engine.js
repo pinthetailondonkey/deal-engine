@@ -300,7 +300,7 @@ export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits 
 
   function verifyParamsWitness(statement, stc) {
     try {
-      return verifyWitnessStatement(stc, statement);
+      return verifyWitnessStatement(stc, statement, [], { keyTimeline });
     } catch {
       return false;
     }

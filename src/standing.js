@@ -121,14 +121,10 @@ export function standing(view, now) {
     // and resolves invalid at the checkpoint's own issue time, its
     // statements count for nothing here.
     const statements = arr(view.witnessStatements).filter((statement) => {
-      if (!verifyWitnessStatement(stc, statement, opts.witnessRotations)) return false;
-      if (timeline) {
-        // a stolen witness key the timeline retired stops speaking (attack
-        // round two, protocol F4). A key the timeline never tracked is
-        // still the registry's own authority — unknown is not revoked.
-        const resolved = keyTimelineResolve(timeline, statement.witness, stc.body.issuedAt);
-        if (!resolved.valid && resolved.reason !== 'unknown') return false;
-      }
+      // the machinery now carries the timeline itself (attack round three,
+      // protocol P1/P7): the statement gate and inheritance seats grade
+      // against it, so the same gate holds in adjudication too
+      if (!verifyWitnessStatement(stc, statement, opts.witnessRotations, { keyTimeline: timeline })) return false;
       return true;
     });
     if (statements.length > 0) {

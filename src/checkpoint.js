@@ -1,6 +1,6 @@
 import { canonicalBytes, bytesToHex, H, hashHex } from './canonical.js';
 import { sign, verify, publicKeyOf } from './keys.js';
-import { rotationIsDualSigned } from './rotation.js';
+import { rotationIsDualSigned, keyTimelineResolve } from './rotation.js';
 
 // Signed Tree Checkpoint (STC). Fix for four attacker findings in one object:
 // - every field — seq, size, root, previous head hash, key id — sits inside
@@ -138,17 +138,28 @@ export function signWitnessStatement(witnessSecret, stc, priorStatement = null) 
   };
 }
 
-export function verifyWitnessStatement(stc, statement, rotations = []) {
+export function verifyWitnessStatement(stc, statement, rotations = [], opts = {}) {
   try {
     if (!statement?.body || !statement?.sig) return false;
     if (statement.tag !== WITNESS_TAG) return false;
     if (!verifyCheckpoint(stc)) return false;
     if (statement.body.stcHead !== stc.head) return false;
+    // when the observer carries a key timeline, a key it EXPLICITLY retired
+    // (revoked, rotated away, duplicated) speaks nowhere at all, at the
+    // statement's own claimed time (attack round three, protocol P1: the
+    // freshness path gated revoked witnesses out, but adjudication graded
+    // the very same statements as fork-proved and CLOSED a fork on them).
+    // 'unknown' is still allowed — the registry keeps its own authority
+    // over any key the observer's timeline never heard of.
+    if (opts.keyTimeline) {
+      const resolved = keyTimelineResolve(opts.keyTimeline, statement.witness, statement.body.witnessTime);
+      if (!resolved.valid && resolved.reason !== 'unknown') return false;
+    }
     const registry = stc.body.witnessRegistry.split('|').filter(Boolean);
     // admission: direct registry membership, or a dual-signed rotation on
     // record reaching back to a key the registry admitted. Never self-claim.
     if (!registry.includes(statement.witness)
-      && !admittedWitness(stc, statement.witness, rotations)) return false;
+      && !admittedWitness(stc, statement.witness, rotations, opts.keyTimeline || null)) return false;
     if (Number(stc.body.issuedAt) !== Number(statement.body.witnessTime)) return false;
     return verify(statement.sig, canonicalBytes(statement.body), statement.witness);
   } catch {
@@ -160,7 +171,13 @@ export function verifyWitnessStatement(stc, statement, rotations = []) {
 // only if a dual-signed rotation on record starts from a key the registry
 // already admitted, at or before the checkpoint's issue time. No key
 // admits itself. (Signature and head checks are done by the caller.)
-export function admittedWitness(stc, witnessPub, rotations = []) {
+// When the observer carries a key timeline, inheritance rides a LIVE
+// source seat (attack round three, protocol P7): a source key the
+// timeline retired before THIS checkpoint cannot pass its seat on by a
+// rotation dated anywhere in its past — the successor must be
+// acknowledged by being listed in the registry of this checkpoint (or
+// later ones), never laundered through a dead key.
+export function admittedWitness(stc, witnessPub, rotations = [], timeline = null) {
   let registry;
   try {
     registry = stc.body.witnessRegistry.split('|').filter(Boolean);
@@ -176,7 +193,13 @@ export function admittedWitness(stc, witnessPub, rotations = []) {
     if (!Number.isInteger(rotation.body.at)) continue;
     if (Number(rotation.body.at) > Number(stc.body.issuedAt)) continue;
     if (!registry.includes(rotation.body.oldKey)) continue;
-    if (rotation.body.newKey === witnessPub) return rotationIsDualSigned(rotation);
+    if (rotation.body.newKey === witnessPub) {
+      if (timeline) {
+        const resolved = keyTimelineResolve(timeline, rotation.body.oldKey, Number(stc.body.issuedAt));
+        if (!resolved.valid && resolved.reason !== 'unknown') continue;
+      }
+      return rotationIsDualSigned(rotation);
+    }
   }
   return false;
 }

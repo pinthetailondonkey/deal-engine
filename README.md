@@ -34,6 +34,7 @@ Cipher app already uses.
 | A stranger adjudicates someone else's fork, or the admission is tampered | The admission is itself a signed record over the kept/dropped heads; it must name THIS split and carry the same key that signed the checkpoints | `adjudication.test.js` — stranger and tampered sigs fail |
 | (Semantics deliberately strengthened) valid pre-revocation evidence alone used to set FORKED | Now pre-revocation evidence without a shared witness stays open — visible but not a verdict; one witness on both sides closes it | `rotation.test.js` — revised on purpose, both shapes pinned |
 | Leaf salt from one party: the vendor could pre-grind a dictionary against its own published leaves | Both parties' randomness mixed at commit: buyer contributes ≥ 8 bytes, the final salt is a domain-separated hash of both, and provenance is returned labeled | `engine.test.js` — degenerate salts throw; window still opens; vendor-only fallback labeled |
+| A revealed window leaks more than membership: the co-path names the leaf's position and the tree's size — "correlation is a read" | A second, opt-in surface: an RSA accumulator committed INSIDE the checkpoint signature (`accN`, `accRoot`); `revealDealBlind` returns element + witness and verifies `witness^element === root (mod N)` — no index, no treeSize, no co-path. Refuses membership for records the newest checkpoint never counted, and cross-checks the root against the live log first | `accumulator.test.js` — every index verifies, strangers fail, no positional field in the answer |
 
 And two things the engine deliberately does NOT do (the reports' honest
 split): it does not anchor a phone to the physical world — that is an
@@ -52,6 +53,7 @@ count is a self-declared, witnessed tree size, worded exactly that way.
 - `log.js` — blinded log + commits
 - `standing.js` — the 7-state lifecycle on the observer's clock
 - `adjudication.js` — the fork procedure: fork-proved / vendor-confirmed / adjudication-open
+- `accumulator.js` — position-blind membership (RSA accumulator, pure BigInt)
 - `dispute.js` — disputes + resolutions
 - `title.js` — per-item custody chain
 - `engine.js` — the facade wiring all of it
@@ -66,7 +68,9 @@ count is a self-declared, witnessed tree size, worded exactly that way.
   when only the vendor contributes. What remains a market question:
   making sure buyers actually contribute.
 - `Genuinely open`, cited from the reports: witness-overlap economics
-  under real gossip partitions (a market question), and position-blind
-  (ZK) membership proofs. Partition-vs-fork is now an adjudication
-  procedure, not an open question; what remains open is when honest
-  witnesses END UP shared — the engine cannot make them.
+  under real gossip partitions (a market question). Partition-vs-fork
+  is now an adjudication procedure, not an open question; position-blind
+  (ZK) membership is now the opt-in accumulator surface. What remains
+  open is when honest witnesses END UP shared — the engine cannot make
+  them — and batch membership proofs (witness updates on append are
+  linear; a production log would amortize with batch trees).

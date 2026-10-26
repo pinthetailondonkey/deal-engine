@@ -1,6 +1,7 @@
 import { bytesToHex, H, canonicalBytes } from './canonical.js';
 import { makeTree } from './merkle.js';
 import { publicKeyOf } from './keys.js';
+import { elementOf, accRootOf } from './accumulator.js';
 import {
   signCheckpoint, verifyCheckpoint, keyIdOf,
   verifyWitnessStatement, verifyForkEvidence,
@@ -72,6 +73,11 @@ export function makeLog(options = {}) {
     get records() { return records.slice(); },
     get voided() { return [...voidEd.values()]; },
 
+    // the accumulator's elements, in log order, from the BLINDED leaves
+    elementsFor() {
+      return records.map((_, index) => elementOf(bytesToHex(log.leafBytes(index))));
+    },
+
     // key rotation: the log admits the successor so post-rotation commits
     // verify against the NEW key. Pre-rotation records stay valid as-is.
     setVendor(newVendorKey) {
@@ -119,9 +125,15 @@ export function makeLog(options = {}) {
 
     // checkpoint over the current tree. The SIGNER owns seq; cadence itself
     // is a protocol constant and cannot be re-declared by the vendor.
-    signedTreeState(secretKey, { seq, issuedAt, witnessRegistry, priorHead = '' }) {
+    // accN opts in the accumulator: accRoot commits to the SAME set the
+    // Merkle root commits to, so both surfaces describe one tree.
+    signedTreeState(secretKey, { seq, issuedAt, witnessRegistry, priorHead = '', accN = '' }) {
       if (records.length === 0) throw new Error('An empty tree checkpoints nothing.');
       const tree = makeTree(records.map((_, index) => log.leafBytes(index)));
+      let accRoot = '';
+      if (accN) {
+        accRoot = accRootOf(log.elementsFor(), accN);
+      }
       const body = {
         seq: seq ?? 1,
         treeSize: records.length,
@@ -130,6 +142,8 @@ export function makeLog(options = {}) {
         issuedAt,
         keyId: keyIdOf(publicKeyOf(secretKey)),
         witnessRegistry: witnessRegistry || [],
+        accN: accN || '',
+        accRoot,
       };
       return signCheckpoint(secretKey, body);
     },

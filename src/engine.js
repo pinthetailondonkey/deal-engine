@@ -11,6 +11,7 @@ import {
   signDispute, signResolution, disputeStatus,
 } from './dispute.js';
 import { generateKey, sign, verify, publicKeyOf } from './keys.js';
+import { generateModulus, elementOf, accRootOf, accWitness, verifyBlindMembership } from './accumulator.js';
 import { standing } from './standing.js';
 import { signRotation, signRevocation, keyTimelineResolve } from './rotation.js';
 import { amountUnits, unitsToAmount, normalizeAmount, sumAmounts } from './units.js';
@@ -29,7 +30,7 @@ import {
 //   hands out inclusion proofs only with the leaf's salt — no salt, no
 //   membership oracle. (Rule 10: correlation is a read.)
 // - disclosure answers are separately priced: one reveal answers one leaf.
-export function createEngine({ vendor, now = () => Date.now() } = {}) {
+export function createEngine({ vendor, now = () => Date.now(), accSeed, accBits = 2048 } = {}) {
   const vendorPair = generateKey();
   const engine = {
     vendor,
@@ -46,6 +47,21 @@ export function createEngine({ vendor, now = () => Date.now() } = {}) {
   const disputeBook = new Map();  // dispute hash -> { dispute, resolutions: [] }
   const keyTimeline = [{ kind: 'vendor', publicKey: vendorPair.publicKey, from: 0, until: null }];
   const witnessRotations = [];
+
+  // The accumulator (position-blind membership), opted in by engine
+  // options accSeed / accBits or the first checkpoint that passes them.
+  // One engine keeps one stable modulus for its whole life.
+  let accMods = null;
+  let accSeedOpt = accSeed ?? null;
+  engine.accKey = () => {
+    if (!accMods) {
+      if (typeof accSeedOpt !== 'string') {
+        throw new Error('The accumulator is opted in with a seed: engine.checkpoint({accSeed}).');
+      }
+      accMods = generateModulus({ seed: accSeedOpt, bits: accBits });
+    }
+    return accMods;
+  };
 
   // Key rotation: old and new vendor keys sign one record; the engine's
   // checkpoint path switches to the new key. Honest limit, stated here:
@@ -107,17 +123,28 @@ export function createEngine({ vendor, now = () => Date.now() } = {}) {
   engine.countersign = (record) => signRecord(engine.keys.secretKey, record.body, record);
 
   // The checkpoint the vendor publishes. seq must increase; prevHead must
-  // match the latest checkpoint this engine already signed.
+  // match the latest checkpoint this engine already signed. opts.accSeed
+  // opts the accumulator in: the same seed keeps one stable N across all
+  // of this engine's checkpoints (dev seeds are deterministic — see
+  // accumulator.js; production reads random bytes).
   engine.checkpoint = (opts = {}) => {
     const prior = stcs.filter(verifyCheckpoint).slice(-1)[0] || null;
     if (prior && opts.priorHead && opts.priorHead !== prior.head) {
       throw new Error('A checkpoint extends the latest one or nothing.');
+    }
+    // once the accumulator is opted in, every later checkpoint keeps
+    // publishing it — a dormant engine stays field-free instead.
+    let accN = '';
+    if (opts.accSeed !== undefined || accMods) {
+      if (opts.accSeed !== undefined) accSeedOpt = opts.accSeed;
+      accN = engine.accKey().n.toString(16);
     }
     const stc = log.signedTreeState(engine.keys.secretKey, {
       seq: opts.seq ?? ((prior?.body.seq ?? 0) + 1),
       issuedAt: opts.at ?? now(),
       witnessRegistry: opts.witnessRegistry || [],
       priorHead: prior?.head || '',
+      accN,
     });
     stcs.push(stc);
     return stc;
@@ -235,6 +262,44 @@ export function createEngine({ vendor, now = () => Date.now() } = {}) {
       root: toHex(tree.mthAll()),
       check: verifyInclusionProof(leafBytes, index, log.records.length, proof, toHex(tree.mthAll())),
     };
+  };
+
+  // The blind window: the SAME membership, proven without position and
+  // without size. Returns the element root/witness pair from the newest
+  // accumulator checkpoint and nothing else — no index, no treeSize, no
+  // co-path to triangulate from. The honesty gates read like the rest of
+  // the engine: a record the newest checkpoint never counted is refused
+  // membership, and the published root is cross-checked against the live
+  // log before any witness leaves the house.
+  engine.revealDealBlind = (dealId) => {
+    const index = log.records.findIndex((row) => row.record.body.dealId === dealId);
+    if (index < 0) return { granted: false, reason: 'not in log' };
+    const stc = stcs.filter(verifyCheckpoint).slice(-1)[0] || null;
+    if (!stc || !stc.body || !stc.body.accN || !stc.body.accRoot) {
+      return { granted: false, reason: 'no published accumulator' };
+    }
+    if (index >= stc.body.treeSize) {
+      return { granted: false, reason: 'not in the newest checkpoint' };
+    }
+    const slice = log.records.slice(0, stc.body.treeSize);
+    const elements = slice.map((_, i) => elementOf(bytesToHex(log.leafBytes(i))));
+    const root = accRootOf(elements, stc.body.accN);
+    if (root !== stc.body.accRoot) {
+      return { granted: false, reason: 'the log does not match its own checkpoint' };
+    }
+    const witness = accWitness(elements, index, stc.body.accN);
+    const answer = {
+      granted: true,
+      root: stc.body.accRoot,
+      n: stc.body.accN,
+      elem: elements[index],
+      witness,
+    };
+    // the answer proves itself the same way an auditor would check it
+    if (!verifyBlindMembership(answer, answer.elem, answer.witness)) {
+      return { granted: false, reason: 'the witness did not verify' };
+    }
+    return answer;
   };
 
   // ---- money --------------------------------------------------------------

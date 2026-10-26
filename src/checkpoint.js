@@ -31,6 +31,9 @@ export function checkpointBody(input = {}) {
     issuedAt: requireInt(input.issuedAt, 'issuedAt'),
     keyId: String(input.keyId || ''),
     witnessRegistry: witnessRegistryCanonical(input.witnessRegistry),
+    // the position-blind accumulator, optional: empty when not opted in
+    accN: String(input.accN || '').toLowerCase(),
+    accRoot: String(input.accRoot || '').toLowerCase(),
   };
   if (!body.keyId) throw new Error('The checkpoint needs a key id.');
   return body;

@@ -50,19 +50,36 @@ export function canonical(value) {
   // Keys sorted, no whitespace, arrays in order. A float is not a coin amount;
   // amounts must already be strings on the way in.
   //
-  // Landmine, known and deliberate: canonical() is NOT injective — distinct
-  // values can render the same bytes. `null` and `undefined` both render ''
-  // (so ['a', null] and ['a', undefined] are the same bytes, and an object
-  // whose value is undefined drops the key entirely); NaN and ±Infinity
-  // render 'null' via JSON.stringify. In practice the engine never feeds
-  // these values to a signature: every signed body is built by a *Body()
-  // constructor that validates types first. But any NEW signed surface must
-  // keep that discipline — do not sign caller-shaped objects raw, and do
-  // not treat canonical-equal as deep-equal.
-  if (value == null) return '';
+  // INJECTIVE BY CONSTRUCTION (closes the old landmine, documented-deliberate
+  // before): no two distinct renderable values share bytes. The old renderer
+  // aliased null with undefined and NaN/±Infinity with each other, and dropped
+  // undefined-valued keys — so ['a', null] and ['a', undefined] signed alike
+  // and {a: undefined} signed as {}. Every *Body() constructor validated types
+  // first, so no honest body ever carried those values — but the rule "the
+  // engine never feeds them to a signature" was a social discipline, and any
+  // NEW surface could break it silently. Now the renderer closes the class
+  // itself: undefined, null and each non-finite number carry their own tagged
+  // bytes, undefined-valued keys are kept, and a symbol or function — values
+  // whose bytes nobody can honestly define — REFUSE loudly instead of
+  // rendering, so an alias cannot exist.
+  //
+  // Scope of the promise, stated: injective over the values this function
+  // accepts, exactly. [1] and [1, undefined] stay distinct. A hole is
+  // indistinguishable from an undefined element — they ARE the same rendered
+  // data — and -0 aliases with 0 because they are one number value, not two.
+  if (value === undefined) return '~undefined';
+  if (value === null) return '~null';
+  if (typeof value === 'bigint') return `~bigint:${value.toString()}`;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return `~number:${value}`;
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'symbol' || typeof value === 'function' || typeof value === 'object' && value instanceof Promise) {
+    throw new Error('A signed body refuses this value type: it has no canonical bytes.');
+  }
   if (typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  const keys = Object.keys(value).filter((key) => value[key] !== undefined).sort();
+  const keys = Object.keys(value).sort();
   return `{${keys.map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
 }
 

@@ -13,14 +13,18 @@ import { sign, verify, publicKeyOf, deriveItemKey } from './keys.js';
 //   an external attestation the engine records and requires, never an
 //   engine-computed truth. Honest limitation, stated in the code that would
 //   otherwise hide it.
-// - ANCHOR ATTESTATION IS NOT ENFORCED. The anchor hop's signature rule
-//   (requiredSignersFor: 'to' signs) proves only that the named registry
-//   key accepted the hop — it does NOT prove any check was performed on
-//   the physical item, and the engine has no way to demand one. A registry
-//   key can sign an anchor for an item it never saw. Any consumer who
-//   reads an anchor hop as "a registry verified this item" is reading
-//   something the engine never guaranteed; the attestation's strength is
-//   entirely the registry's own out-of-band procedure, outside this code.
+// - ANCHOR ATTESTATION IS HARD-GATED NOW (closes the old hole): an anchor
+//   hop only verifies inside a chain when the READER holds an admitted
+//   registry key set (opts.anchorKeys) and the anchor's signing key is in
+//   it. A chain carrying an anchor that arrives with no registry — a bad
+//   one, an empty one, a malformed one — refuses outright, never a silent
+//   pass. The self-anchored restart hop is an anchor kind: it always
+//   requires the registry. What the gate does NOT change: the signature
+//   rule (requiredSignersFor: 'to' signs) proves still only that the key
+//   accepted the hop — it does NOT prove the registry's out-of-band check
+//   was performed. The engine closes the verification hole (an unadmitted
+//   key can no longer pass an anchor off as verified); the attestation's
+//   real strength remains the registry's own procedure, outside this code.
 
 export const HOP_TAG = 'Title hop v1';
 export const DISPUTE_ATTACH_TAG = 'Title dispute attach v1';
@@ -110,6 +114,25 @@ export function verifyHopChain(hops, opts = {}) {
   // the break's holder is the item key, and custody resumes only from it.
   let tip = null;
   const sorted = [...(hops || [])].sort((a, b) => (a?.body?.at ?? 0) - (b?.body?.at ?? 0));
+  // ANCHOR GATE: any anchor in the chain demands the reader's own registry.
+  // Empty array = registered-but-refuses-all: loud, never a silent pass.
+  // A non-array (or junk hex inside) refuses the same way — an anchor
+  // chain never downgrades to keyless verification on a reader's mistake.
+  // (The self-anchored restart IS an anchor kind: born chains stay
+  // registry-free; the gate bites exactly where an attestation exists.)
+  const hasAnchor = sorted.some((hop) => hop?.body?.kind === 'anchor');
+  if (hasAnchor) {
+    if (!(opts.anchorKeys instanceof Array)) return { ok: false, reason: 'anchor-unregistered' };
+    if (!opts.anchorKeys.every((key) => typeof key === 'string' && /^[0-9a-f]{64}$/.test(key.toLowerCase()))) {
+      return { ok: false, reason: 'anchor-unregistered' };
+    }
+    const admitted = new Set(opts.anchorKeys.map((key) => key.toLowerCase()));
+    for (const hop of sorted) {
+      if (hop?.body?.kind === 'anchor' && !admitted.has(hop.body.to)) {
+        return { ok: false, reason: 'anchor-unregistered' };
+      }
+    }
+  }
   for (const hop of sorted) {
     if (!verifyHop(hop)) return { ok: false, reason: 'signature' };
     if (hop.body.kind === 'truncation' && hop.body.from !== hop.body.itemKey) {
@@ -154,6 +177,22 @@ export function verifyHop(hop) {
   } catch {
     return false;
   }
+}
+
+export function verifyAnchorHop(hop, anchorKeys) {
+  // The single door for reading an anchor hop OUTSIDE a chain: full
+  // signature verification, PLUS admission against the reader's own
+  // registry key set. Same hard rule as verifyHopChain — a missing,
+  // empty, malformed or non-array registry refuses, never a silent pass.
+  // Returns { ok:true, reason:'admitted' } or { ok:false, reason }.
+  if (!(anchorKeys instanceof Array)) return { ok: false, reason: 'anchor-unregistered' };
+  if (!anchorKeys.every((key) => typeof key === 'string' && /^[0-9a-f]{64}$/.test(key.toLowerCase()))) {
+    return { ok: false, reason: 'anchor-unregistered' };
+  }
+  if (!verifyHop(hop)) return { ok: false, reason: 'signature' };
+  if (hop.body.kind !== 'anchor') return { ok: false, reason: 'not-anchor' };
+  if (!anchorKeys.some((key) => key.toLowerCase() === hop.body.to)) return { ok: false, reason: 'anchor-unregistered' };
+  return { ok: true, reason: 'admitted' };
 }
 
 export function truncateTitleLineage(itemSecretKey, priorTip, itemKeyPub, at) {

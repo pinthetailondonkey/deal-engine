@@ -98,9 +98,14 @@ each limit is where the honest sentence lives:
   them. The closing rule is one layer up: read `(root, n)` from ONE
   verified signed checkpoint body and check with
   `verifyBlindMembershipIn` (`checkpoint.js`).
-- **Anchor attestation not enforced** (`title.js`): an anchor hop proves a
-  registry key signed it, never that the registry checked the item. The
-  attestation's strength lives entirely outside this code.
+- **Anchor attestation** (`title.js`): the verification hole is
+  closed — an anchor hop verifies only when the READER holds an admitted
+  registry key set (`opts.anchorKeys`) and the anchor's signing key is in
+  it; anchor-bearing chains arriving with no registry refuse outright
+  (`anchor-unregistered`). What no code can promise: that the registry
+  actually performed its out-of-band check of the physical item. The
+  attestation's real strength stays the registry's own procedure, outside
+  this code.
 
 - Salt provenance: closed. The vendor always brings fresh bytes; the buyer
   MAY contribute at least 8 bytes and the stored salt is

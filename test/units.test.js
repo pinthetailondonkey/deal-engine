@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { amountUnits, unitsToAmount, normalizeAmount, sumAmounts } from '../src/units.js';
+import { ASSETS, AMOUNT_SCALE, amountUnits, unitsToAmount, normalizeAmount, sumAmounts } from '../src/units.js';
 
 test('money: a float is not a coin amount — numbers only enter as finite strings', () => {
   assert.equal(amountUnits('0.000000000001', 'xmr'), 1n); // 1 piconero
@@ -47,4 +47,14 @@ test('money: sum keeps precision at scale', () => {
   ]);
   assert.equal(out.amount, '0.5');
   assert.equal(out.units, 500000000000n);
+});
+
+test('the asset table is the one row-per-rail config: a rail the table does not declare is nowhere', () => {
+  assert.equal(AMOUNT_SCALE.btc, 8, 'bitcoin 8 decimals — the fact is a config row now, the fact does not move');
+  assert.equal(AMOUNT_SCALE.xmr, 12, 'monero 12 decimals');
+  assert.equal(ASSETS.xmr.chain, 'hidden-amount', 'the chain class is config, read by a bulletin law, never by the engine');
+  assert.equal(ASSETS.btc.chain, 'transparent');
+  assert.equal(amountUnits('1', 'ltc'), null, 'an undeclared rail units to nothing');
+  assert.throws(() => unitsToAmount(1n, 'eth'), /Unknown currency/, 'rendering an undeclared rail refuses');
+  assert.equal(amountUnits('1', 'BTC'), 100000000n, 'the rail word case-folds through the table');
 });

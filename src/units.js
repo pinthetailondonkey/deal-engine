@@ -8,7 +8,32 @@
 // signed amount), a comma INSIDE digits is a domain error (comma stripping
 // used to rewrite '1,5' into '15'), a negative unit count renders sanely,
 // and the empty sum is an explicit result, not a TypeError.
-export const AMOUNT_SCALE = { btc: 8, xmr: 12 };
+//
+// Founder ruling ("deal should work with all crypto not just btc and xmr"):
+// the pair stops being written out by hand. ASSETS is the one row-per-rail
+// table — decimals is the atomic-unit power (the piconero class bug is the
+// thing every future row must get right); chain records whether the chain
+// itself shows amounts ('transparent') or hides them ('hidden-amount'),
+// which is what a bulletin/stats law reads, not what the engine compares.
+// Adding a coin is a row plus a watcher, never engine surgery: everything
+// below reads the table through scaleOf, and AMOUNT_SCALE stays exported by
+// its old name because a scale is the only fact this layer ever had to
+// expose. Confirmation depth, address formats and watcher hooks live
+// app-side and in the watcher, not here — the engine consents to a
+// settlement record, it never talks to a chain.
+export const ASSETS = {
+  btc: { decimals: 8, chain: 'transparent' },
+  xmr: { decimals: 12, chain: 'hidden-amount' },
+};
+
+// The scale map, by its old name — one decimal power per rail.
+export const AMOUNT_SCALE = Object.fromEntries(
+  Object.entries(ASSETS).map(([rail, asset]) => [rail, asset.decimals]),
+);
+
+function scaleOf(currency) {
+  return AMOUNT_SCALE[String(currency || '').toLowerCase()];
+}
 
 export function normalizeAmount(value) {
   if (typeof value === 'number') {
@@ -26,7 +51,7 @@ export function normalizeAmount(value) {
 }
 
 export function amountUnits(amount, currency) {
-  const scale = AMOUNT_SCALE[String(currency || '').toLowerCase()];
+  const scale = scaleOf(currency);
   if (scale == null) return null;
   let text;
   try {
@@ -50,7 +75,7 @@ export function unitsToAmount(units, currency) {
     throw new Error('Units are an integer (BigInt). A float is not a coin amount.');
   }
   const value = BigInt(units);
-  const scale = AMOUNT_SCALE[String(currency || '').toLowerCase()];
+  const scale = scaleOf(currency);
   if (scale == null) throw new Error(`Unknown currency: ${String(currency)}`);
   const factor = 10n ** BigInt(scale);
   const sign = value < 0n ? '-' : '';
